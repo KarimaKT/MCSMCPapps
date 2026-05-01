@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Copilot Studio Embedded Chat</title>
+    <style>
+      html,
+      body,
+      #webchat {
+        height: 100%;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      #status {
+        padding: 0.5rem 1rem;
+        font-size: 0.85rem;
+        color: #555;
+        background: #f4f4f6;
+        border-bottom: 1px solid #e2e2e6;
+      }
+      #status[data-state="error"] {
+        background: #fde7e9;
+        color: #8b0000;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="status" role="status" aria-live="polite">Initialising…</div>
+    <div id="webchat" role="main" aria-label="Embedded Copilot Studio chat"></div>
+
+    <!-- Bot Framework Web Chat is shipped as a CDN script (smaller bundle). -->
+    <script
+      crossorigin="anonymous"
+      src="https://cdn.botframework.com/botframework-webchat/latest/webchat.js"
+    ></script>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

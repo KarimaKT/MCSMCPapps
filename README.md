@@ -2,7 +2,7 @@
 
 > **Status:** 🚧 First-try / experimental pattern. Phase 1 (scaffold) complete. See [docs/PROGRESS.md](docs/PROGRESS.md) for current state.
 
-A reference implementation that embeds a **Microsoft Copilot Studio (MCS) agent** inside **Microsoft 365 Copilot** using a 3-piece launcher pattern — without disturbing your existing CEA (Custom Engine Agent).
+A reference implementation that embeds a **Microsoft Copilot Studio (MCS) agent** inside **Microsoft 365 Copilot** using a 3-piece launcher pattern — giving the agent a long-running, custom WebChat surface inside the M365 Copilot pane.
 
 ```text
 User ▶ M365 Copilot ▶ Declarative Agent (launcher) ▶ MCP App (HTML host) ▶ WebChat UI ▶ Copilot Studio Agent
@@ -15,7 +15,7 @@ Microsoft 365 Copilot's built-in chat surface enforces LLM-driven turn timeouts 
 - ✅ Long-running conversations (no per-turn timeout from the host LLM)
 - ✅ Direct line to your Copilot Studio agent — no LLM-in-the-middle reinterpretation
 - ✅ Full WebChat UX (typing indicators, adaptive cards, attachments)
-- ✅ Coexists with your existing CEA — both stay available in M365 Copilot
+- ✅ Single-purpose Declarative Agent — coexists with anything else in your M365 tenant
 - ✅ SSO with the signed-in M365 user (see [Authentication](#authentication))
 
 ## Repo layout
@@ -76,11 +76,6 @@ Configure your CS agent for **Manual Entra (Microsoft) authentication** so it ca
 | **MCP App tool** | Returns an `mcp_app` payload pointing at the hosted UI. | MCP server (this repo) |
 | **WebChat UI** | Renders Bot Framework Web Chat, authenticates the user, opens a Direct Line conversation with your CS agent. | Azure Static Web Apps |
 | **Copilot Studio agent** | All reasoning, topics, actions, long-running flows. | Power Platform / Copilot Studio |
-| **CEA (yours)** | Untouched. Continues serving its existing tools/workflows. | Wherever it lives today |
-
-## Coexistence with your existing CEA
-
-Nothing in this repo modifies your CEA. The DA published from `declarative-agent/` is a **separate** Copilot Extension that lives alongside it. Users invoke the DA only when they want the embedded CS chat surface; everything else routes through the CEA as before.
 
 ## Security notes
 
