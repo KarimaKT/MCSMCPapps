@@ -1,0 +1,12 @@
+{
+  "recommendations": [
+    "ms-copilotstudio.vscode-copilotstudio",
+    "teamsdevapp.ms-teams-vscode-extension",
+    "ms-azuretools.vscode-azurestaticwebapps",
+    "ms-azuretools.vscode-bicep",
+    "ms-azuretools.vscode-azureresourcegroups",
+    "GitHub.vscode-pull-request-github",
+    "redhat.vscode-yaml",
+    "dbaeumer.vscode-eslint"
+  ]
+}
