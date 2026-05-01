@@ -38,6 +38,8 @@ export interface CsConversation {
   /** Send a user message into the conversation. Resolves once the bot's
    *  responses for this turn have been streamed. */
   sendUserMessage(text: string): Promise<void>;
+  /** Send a raw Activity (event, suggested-action response, etc.). */
+  sendActivity(activity: Partial<Activity>): Promise<void>;
   /** Conversation ID once known. */
   readonly conversationId: string | undefined;
   /** Stop streaming and release resources. */
@@ -89,6 +91,14 @@ export async function openConversation(
         from: { id: 'user', role: 'user' }
       } as unknown as Activity;
       await pump(client.sendActivityStreaming(activity));
+    },
+    async sendActivity(activity: Partial<Activity>) {
+      if (closed) throw new Error('Conversation already closed.');
+      const full = {
+        from: { id: 'user', role: 'user' },
+        ...activity
+      } as unknown as Activity;
+      await pump(client.sendActivityStreaming(full));
     },
     close() {
       closed = true;

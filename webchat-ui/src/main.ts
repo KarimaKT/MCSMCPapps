@@ -2,40 +2,31 @@
  * MCSMCPapps — embedded WebChat bootstrap.
  *
  * Boot order:
- *   1. Mount the minimal chat UI shell.
+ *   1. Mount the chat UI shell.
  *   2. Acquire a Power Platform API access token (Teams JS → MSAL silent).
  *   3. Open a CS Wave-2 conversation via the SDK.
- *   4. Wire user input ↔ inbound activities.
- *
- * If any step fails, the status banner shows actionable text. We never
- * silently go blank.
+ *   4. Send an outbound `userContext` event so the topic can greet the user.
+ *   5. Wire user input ↔ rich-rendered inbound activities.
  */
 
 import type { Activity } from '@microsoft/agents-activity';
 import { acquireToken } from './auth';
 import { openConversation, type CsConversation } from './directLine';
 import { mountChatUi, type ChatUi } from './chatUi';
+import { renderActivity, type SuggestedActionEvent } from './messageRenderer';
 
 const root = document.getElementById('app') ?? document.body;
+const AGENT_TITLE = 'Eurozone Analyst'; // TODO: pull from CS metadata when available
 
 let ui: ChatUi | null = null;
 let conversation: CsConversation | null = null;
 
-function describeActivity(a: Activity): string {
-  // Best-effort plain-text rendering. Phase 7 Chunk B replaces this with
-  // markdown + Adaptive Cards + suggested actions.
-  if (a.text && a.text.trim()) return a.text;
-  if (a.type === 'event') return `[event: ${a.name ?? 'unnamed'}]`;
-  if (a.type === 'typing') return '';
-  if (a.type === 'conversationUpdate') return '';
-  if (a.attachments && a.attachments.length > 0) {
-    return `[attachment: ${a.attachments.map((x) => x.contentType).join(', ')}]`;
-  }
-  return `[${a.type}]`;
-}
-
 function handleActivity(activity: Activity): void {
   if (!ui) return;
+
+  // Verbose log so we can inspect bot output shape during dev.
+  // eslint-disable-next-line no-console
+  console.debug('[cs:activity]', activity.type, activity);
 
   if (activity.type === 'typing') {
     ui.setTyping(true);
@@ -43,37 +34,98 @@ function handleActivity(activity: Activity): void {
   }
   if (activity.type === 'message') {
     ui.setTyping(false);
-    const text = describeActivity(activity);
-    if (text) ui.appendMessage('bot', text);
+    const host = ui.appendBotContainer();
+    renderActivity(activity, host, {
+      onSuggestedAction: handleSuggestedAction,
+      onAdaptiveSubmit: handleAdaptiveSubmit
+    });
     return;
   }
   if (activity.type === 'event') {
-    // For Chunk A we just log events. Chunk B will route specific names
-    // (handoff, progress, etc.) to handlers.
     // eslint-disable-next-line no-console
     console.debug('[cs:event]', activity.name, activity.value);
     return;
   }
   if (activity.type === 'conversationUpdate') {
-    // No-op for Chunk A.
     return;
   }
-  // Unknown / not yet handled
-  // eslint-disable-next-line no-console
-  console.debug('[cs:activity]', activity.type, activity);
+  // Unknown — already logged above.
+}
+
+function handleSuggestedAction(action: SuggestedActionEvent): void {
+  if (!conversation || !ui) return;
+  // Show the user's selection as if they typed it.
+  ui.appendUserMessage(action.title || action.value);
+  ui.setTyping(true);
+  void conversation
+    .sendUserMessage(action.value)
+    .catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      ui?.appendSystemMessage(`Error: ${message}`);
+    })
+    .finally(() => {
+      ui?.setTyping(false);
+      ui?.focusInput();
+    });
+}
+
+function handleAdaptiveSubmit(data: unknown): void {
+  if (!conversation || !ui) return;
+  ui.appendSystemMessage('(form submitted)');
+  ui.setTyping(true);
+  void conversation
+    .sendActivity({
+      type: 'message',
+      // Per Bot Framework convention, Action.Submit data goes in `value` and
+      // CS topics read it from there.
+      value: data,
+      text: ''
+    })
+    .catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      ui?.appendSystemMessage(`Error: ${message}`);
+    })
+    .finally(() => {
+      ui?.setTyping(false);
+      ui?.focusInput();
+    });
+}
+
+async function sendUserContext(): Promise<void> {
+  if (!conversation) return;
+  try {
+    const account = (await acquireToken()).account;
+    await conversation.sendActivity({
+      type: 'event',
+      name: 'userContext',
+      value: {
+        name: account?.name,
+        upn: account?.username,
+        oid: account?.localAccountId,
+        locale: navigator.language,
+        theme:
+          window.matchMedia('(prefers-color-scheme: dark)').matches
+            ? 'dark'
+            : 'light',
+        host: window.location.hostname
+      }
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[userContext] failed to send', err);
+  }
 }
 
 async function bootstrap(): Promise<void> {
   ui = mountChatUi(root, {
     onSend: async (text) => {
-      ui?.appendMessage('user', text);
+      ui?.appendUserMessage(text);
       ui?.setTyping(true);
       try {
         await conversation?.sendUserMessage(text);
       } catch (err) {
-        ui?.setTyping(false);
         const message = err instanceof Error ? err.message : String(err);
-        ui?.appendMessage('system', `Error sending: ${message}`);
+        ui?.appendSystemMessage(`Error sending: ${message}`);
       } finally {
         ui?.setTyping(false);
         ui?.focusInput();
@@ -81,6 +133,7 @@ async function bootstrap(): Promise<void> {
     }
   });
 
+  ui.setTitle(AGENT_TITLE);
   ui.enableInput(false);
   ui.setStatus('Acquiring identity…', 'info');
 
@@ -103,7 +156,7 @@ async function bootstrap(): Promise<void> {
       onActivity: handleActivity,
       onError: (err) => {
         ui?.setTyping(false);
-        ui?.appendMessage('system', `Transport error: ${err.message}`);
+        ui?.appendSystemMessage(`Transport error: ${err.message}`);
       }
     });
   } catch (err) {
@@ -115,6 +168,10 @@ async function bootstrap(): Promise<void> {
   ui.setStatus('Connected.', 'ok');
   ui.enableInput(true);
   ui.focusInput();
+
+  // Send the one demo event hook: tell the topic who's signed in + locale.
+  void sendUserContext();
+
   setTimeout(() => ui?.hideStatus(), 1500);
 }
 

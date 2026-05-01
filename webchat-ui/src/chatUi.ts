@@ -1,13 +1,11 @@
 /**
- * Minimal chat UI for the embedded Copilot Studio agent.
+ * Chat UI shell — frame, header, log, typing dots, status banner, input.
  *
- * Renders message bubbles, a system status row, a typing indicator, and an
- * input box. Designed to be replaced with a richer renderer in Phase 7
- * Chunk B (markdown + Adaptive Cards + suggested actions). For now it just
- * lets us validate the SDK transport and SSO end-to-end.
+ * Renderer-agnostic: callers append messages via `appendUserMessage(text)`,
+ * `appendBotContainer()` (returns a host element they fill with rich content),
+ * or `appendSystemMessage(text)`. The `messageRenderer.ts` module renders into
+ * the host element returned by `appendBotContainer`.
  */
-
-export type ChatRole = 'user' | 'bot' | 'system';
 
 export interface ChatUiHandlers {
   /** Called when user submits text from the input box. */
@@ -15,7 +13,14 @@ export interface ChatUiHandlers {
 }
 
 export interface ChatUi {
-  appendMessage(role: ChatRole, text: string): HTMLElement;
+  /** Append a plain-text user bubble. Returns the wrapper element. */
+  appendUserMessage(text: string): HTMLElement;
+  /** Append a system note (centered, italic). */
+  appendSystemMessage(text: string): HTMLElement;
+  /** Append an empty bot container; caller fills it with rich content. */
+  appendBotContainer(): HTMLElement;
+  /** Set the agent display name in the header. */
+  setTitle(title: string): void;
   setTyping(on: boolean): void;
   setStatus(text: string, level?: 'info' | 'ok' | 'error'): void;
   hideStatus(): void;
@@ -51,6 +56,7 @@ export function mountChatUi(root: HTMLElement, handlers: ChatUiHandlers): ChatUi
     </div>
   `;
 
+  const title = root.querySelector('.chat-title') as HTMLDivElement;
   const status = root.querySelector('.chat-status') as HTMLDivElement;
   const log = root.querySelector('.chat-log') as HTMLDivElement;
   const typing = root.querySelector('.chat-typing') as HTMLDivElement;
@@ -58,15 +64,40 @@ export function mountChatUi(root: HTMLElement, handlers: ChatUiHandlers): ChatUi
   const input = root.querySelector('.chat-input') as HTMLInputElement;
   const send = root.querySelector('.chat-send') as HTMLButtonElement;
 
-  function appendMessage(role: ChatRole, text: string): HTMLElement {
-    const el = document.createElement('div');
-    el.className = `msg msg-${role}`;
-    el.textContent = text;
-    log.appendChild(el);
+  function scrollToBottom(): void {
     requestAnimationFrame(() => {
       log.scrollTop = log.scrollHeight;
     });
+  }
+
+  function appendUserMessage(text: string): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'msg msg-user';
+    el.textContent = text;
+    log.appendChild(el);
+    scrollToBottom();
     return el;
+  }
+
+  function appendSystemMessage(text: string): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'msg msg-system';
+    el.textContent = text;
+    log.appendChild(el);
+    scrollToBottom();
+    return el;
+  }
+
+  function appendBotContainer(): HTMLElement {
+    const host = document.createElement('div');
+    host.className = 'msg-host';
+    log.appendChild(host);
+    scrollToBottom();
+    return host;
+  }
+
+  function setTitle(t: string): void {
+    title.textContent = t;
   }
 
   function setTyping(on: boolean): void {
@@ -102,7 +133,6 @@ export function mountChatUi(root: HTMLElement, handlers: ChatUiHandlers): ChatUi
     handlers.onSend(text);
   });
 
-  // Send-on-Enter is the default form behaviour. Add Esc to clear.
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       input.value = '';
@@ -110,7 +140,10 @@ export function mountChatUi(root: HTMLElement, handlers: ChatUiHandlers): ChatUi
   });
 
   return {
-    appendMessage,
+    appendUserMessage,
+    appendSystemMessage,
+    appendBotContainer,
+    setTitle,
     setTyping,
     setStatus,
     hideStatus,
