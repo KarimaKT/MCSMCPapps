@@ -7,13 +7,15 @@ Single source of truth for IDs the WebChat / SWA / DA need. **Do not put secrets
 | Field | Value | Source |
 |---|---|---|
 | Maker portal URL | `https://copilotstudio.preview.microsoft.com/environments/61453fde-f312-e19f-b879-a2dfa518e914/bots/9d6e6825-7945-f111-bec6-7ced8dcd844a/publish` | User |
+| Display name | `Eurozone Analyst` (in env `Contoso Electronics`) | observed |
 | **Environment ID** | `61453fde-f312-e19f-b879-a2dfa518e914` | Parsed from URL |
-| **Bot ID** | `9d6e6825-7945-f111-bec6-7ced8dcd844a` | Parsed from URL |
+| **Bot ID (GUID)** | `9d6e6825-7945-f111-bec6-7ced8dcd844a` | Parsed from URL |
+| **Schema name** | `ksteam_ak001` | embed code in Channels → Web app |
 | **CDX tenant ID** | `301759bc-5be1-40f1-8a44-822e286f5a9d` | User |
 | Dynamics org URL | `orgea8005ed.crm.dynamics.com` | User |
 | **Tenant lifespan** | Expires **August 2026** | User |
-| Schema name | _TBD — capture from agent Settings → Advanced_ | Phase 2 |
-| Direct Line token endpoint | _TBD — Settings → Channels → Direct Line_ | Phase 2 |
+| **Connection string (CS Direct Line API)** | `https://61453fdef312e19fb879a2dfa518e9.14.environment.api.powerplatform.com/copilotstudio/dataverse-backed/authenticated/bots/ksteam_ak001/conversations?api-version=2022-03-01-preview` | Channels → Web app → M365 Agents SDK |
+| **Auth mode** | Manual Entra (federated credentials, no client secret) | Phase 7b |
 
 ## Azure (personal Visual Studio Enterprise subscription)
 
@@ -34,11 +36,12 @@ Single source of truth for IDs the WebChat / SWA / DA need. **Do not put secrets
 
 | Field | Value | Source |
 |---|---|---|
-| Display name | `MCSMCPapps WebChat` | planned |
-| **Owning tenant** | **CDX tenant `301759bc-...`** (NOT the Azure tenant) | by design |
-| Client ID | _TBD_ | Phase 7 |
-| Application ID URI | `api://<client-id>` (default) | Phase 7 |
-| Custom scope | `access_as_user` | planned |
+| Display name | `MCSMCPapps WebChat` | created |
+| **Owning tenant** | **CDX tenant `301759bc-5be1-40f1-8a44-822e286f5a9d`** | by design |
+| **Client ID** | `701e58d1-3d3b-42e8-b2a4-864ba5fe2c61` | created |
+| Object ID | `5d2346cc-f71d-4c6d-843f-344b7b11c5a5` | created |
+| Application ID URI | `api://701e58d1-3d3b-42e8-b2a4-864ba5fe2c61` (default) | Phase 7a.2 |
+| Custom scope | `api://701e58d1-3d3b-42e8-b2a4-864ba5fe2c61/access_as_user` | Phase 7a.2 |
 
 ## How to fill the unknowns
 

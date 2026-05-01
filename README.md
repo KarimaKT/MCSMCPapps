@@ -27,7 +27,7 @@ Microsoft 365 Copilot's built-in chat surface enforces LLM-driven turn timeouts 
 | [declarative-agent/](declarative-agent/) | M365 Declarative Agent manifest. Single-purpose launcher that calls the MCP App tool. |
 | [infra/](infra/) | Bicep + GitHub Actions for hosting the static WebChat UI on Azure Static Web Apps. |
 | [skills/mcp-app-launcher/](skills/mcp-app-launcher/) | A Copilot Studio skill that helps **other agent builders** apply this pattern. |
-| [docs/](docs/) | [BUILD-GUIDE.md](docs/BUILD-GUIDE.md) (manual / no-AI walkthrough) and [PROGRESS.md](docs/PROGRESS.md). |
+| [docs/](docs/) | [BUILD-GUIDE.md](docs/BUILD-GUIDE.md) (manual / no-AI walkthrough), [CAPABILITIES.md](docs/CAPABILITIES.md) (what the runtime can do + demo script), [IDs.md](docs/IDs.md), [AZURE-SUBSCRIPTION.md](docs/AZURE-SUBSCRIPTION.md), [PROGRESS.md](docs/PROGRESS.md). |
 | [Resources/](Resources/) | Source design docs (the original implementation guide). |
 
 ## Quick start (consumer)
@@ -104,6 +104,10 @@ Azure tenant                       M365 / CS tenant (e.g. CDX)
 ## Building this without AI assistance
 
 Follow [docs/BUILD-GUIDE.md](docs/BUILD-GUIDE.md). It contains every command, file, portal click, and verification step needed to reproduce this project from an empty machine.
+
+## What it can actually do
+
+See [docs/CAPABILITIES.md](docs/CAPABILITIES.md) for the full feature matrix — markdown reports, Adaptive Cards, suggested actions, long-running topics, SSO, theming, accessibility, and an end-to-end demo script.
 
 ## Contributing & feedback
 

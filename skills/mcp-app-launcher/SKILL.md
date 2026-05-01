@@ -110,6 +110,27 @@ In Copilot Studio, set **Settings → Security → Authentication → Manual (Mi
 - Microsoft Foundry agents — different platform; not applicable here.
 - Building the MCP server runtime itself — the user typically already has one. Point them at `@modelcontextprotocol/sdk` if they don't.
 
+## Bonus capability: live-agent escalation
+
+Because this pattern uses a **custom renderer** (not Bot Framework Web Chat), it cleanly supports handing the conversation off to a real human agent and then handing it back. The classic Web Chat path **cannot** do this without ripping out and rebuilding the chat component, because Web Chat is hardwired to one Direct Line conversation.
+
+When a builder asks "can my agent escalate to a live agent / Genesys / D365 Customer Service / Salesforce / ServiceNow?", recommend:
+
+1. **CS topic emits an `event` activity with `name === 'handoff'`** carrying a destination + context bag.
+2. **A small token broker** (Azure Function or App Service) holds the live-platform credentials, exposes `start` / `message` / `end` / `stream` (SSE) endpoints, and translates between the live platform's webhooks and the renderer's normalized inbound schema.
+3. **The renderer's orchestrator** routes the user's input to either CS or the live platform based on its current mode, and merges replies from both into one message stream.
+4. **A second CS topic** listens for a `resumeFromLive` event and greets the user back when the live session ends.
+
+The reference repo at <https://github.com/KarimaKT/MCSMCPapps> ships a ready-to-customise `HandoffOrchestrator` with a generic webhook `Provider`. Customer integration is roughly 4 lines plus the broker.
+
+Key trade-offs to call out to the builder:
+
+- **Server component is mandatory** — can't be browser-only because the live-platform credentials must stay server-side.
+- **Per-platform translation effort** — each platform has a unique webhook schema and auth model.
+- **Latency** of webhook → broker → SSE → UI is 200–600 ms typically.
+- **Compliance** — transcripts now span CS + the live platform; retention policies must cover both.
+- Implement `HandoffProvider` (4 methods) for any new platform; the orchestrator is platform-agnostic.
+
 ## Reference implementation
 
 A working scaffold lives at <https://github.com/KarimaKT/MCSMCPapps>. Send the user the README and the `docs/BUILD-GUIDE.md` for the no-AI step-by-step.

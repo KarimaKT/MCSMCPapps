@@ -11,7 +11,7 @@ Living record of what's been done and what's next. Updated at the end of every p
 | 4 | Azure subscription + SWA host | ✅ Done | SWA `swa-mcsmcpapps` deployed in `rg-mcsmcpapps` (westus2). Hostname: `icy-field-07d5bef1e.7.azurestaticapps.net`. GitHub Actions deploy token set as repo secret `AZURE_STATIC_WEB_APPS_API_TOKEN`. |
 | 5 | MCP App tool + DA manifest | ⏳ Pending | M365 Agents Toolkit packaging, sideload via VS Code. |
 | 6 | End-to-end test | ⏳ Pending | All ☑️ rows in BUILD-GUIDE §8 must pass. |
-| 7 | Polish skill + docs | ⏳ Pending | Iterate the Copilot Studio skill based on real findings. |
+| 7 | Polish skill + docs | 🔄 ongoing | `CAPABILITIES.md` written. Live-agent handoff SDK scaffolded under `webchat-ui/src/handoff/` (orchestrator + generic webhook provider; customer plugs in their broker). Skill updated. |
 
 ## Decisions made
 
