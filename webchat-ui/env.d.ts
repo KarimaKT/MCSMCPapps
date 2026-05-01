@@ -19,6 +19,24 @@ interface ImportMetaEnv {
    * audience; the default is https://api.powerplatform.com/.default.
    */
   readonly VITE_AAD_SCOPE: string;
+
+  // ---------- Branding (all optional) ----------
+  /** Display name in the chat header. */
+  readonly VITE_BRAND_AGENT_NAME?: string;
+  /** Subtitle line below agent name. */
+  readonly VITE_BRAND_AGENT_SUBTITLE?: string;
+  /** Logo: emoji, short text, https URL, or data: URL. */
+  readonly VITE_BRAND_LOGO?: string;
+  /** Company name shown in a smaller line. */
+  readonly VITE_BRAND_COMPANY_NAME?: string;
+  /** Primary accent color (any CSS color). */
+  readonly VITE_BRAND_ACCENT_COLOR?: string;
+  /** Foreground color on the accent (e.g. text on user bubbles). */
+  readonly VITE_BRAND_ACCENT_FOREGROUND?: string;
+  /** Font family stack. */
+  readonly VITE_BRAND_FONT_FAMILY?: string;
+  /** HTML <title>. */
+  readonly VITE_BRAND_PAGE_TITLE?: string;
 }
 
 interface ImportMeta {

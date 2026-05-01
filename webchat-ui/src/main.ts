@@ -2,11 +2,15 @@
  * MCSMCPapps — embedded WebChat bootstrap.
  *
  * Boot order:
- *   1. Mount the chat UI shell.
- *   2. Acquire a Power Platform API access token (Teams JS → MSAL silent).
- *   3. Open a CS Wave-2 conversation via the SDK.
- *   4. Send an outbound `userContext` event so the topic can greet the user.
- *   5. Wire user input ↔ rich-rendered inbound activities.
+ *   1. Apply branding (CSS vars + page title) BEFORE mounting UI to avoid FOUC.
+ *   2. Mount the chat UI shell with branded header.
+ *   3. Acquire a Power Platform API access token (Teams JS \u2192 MSAL silent).
+ *   4. Open a CS Wave-2 conversation via the SDK.
+ *   5. Send an outbound `userContext` event so the topic can greet the user.
+ *   6. Wire user input \u2194 rich-rendered inbound activities.
+ *
+ * The maker workflow for rebranding is in docs/MAKER-CONFIG.md \u2014 it should
+ * never require touching this file.
  */
 
 import type { Activity } from '@microsoft/agents-activity';
@@ -14,17 +18,17 @@ import { acquireToken } from './auth';
 import { openConversation, type CsConversation } from './directLine';
 import { mountChatUi, type ChatUi } from './chatUi';
 import { renderActivity, type SuggestedActionEvent } from './messageRenderer';
+import { applyBranding, getBranding } from './branding';
 
 const root = document.getElementById('app') ?? document.body;
-const AGENT_TITLE = 'Eurozone Analyst'; // TODO: pull from CS metadata when available
 
 let ui: ChatUi | null = null;
 let conversation: CsConversation | null = null;
+const branding = getBranding();
 
 function handleActivity(activity: Activity): void {
   if (!ui) return;
 
-  // Verbose log so we can inspect bot output shape during dev.
   // eslint-disable-next-line no-console
   console.debug('[cs:activity]', activity.type, activity);
 
@@ -42,6 +46,8 @@ function handleActivity(activity: Activity): void {
     return;
   }
   if (activity.type === 'event') {
+    // We log inbound events for diagnostics. Branding is intentionally NOT
+    // mutated at runtime — it is a build-time concern owned by the maker.
     // eslint-disable-next-line no-console
     console.debug('[cs:event]', activity.name, activity.value);
     return;
@@ -49,12 +55,10 @@ function handleActivity(activity: Activity): void {
   if (activity.type === 'conversationUpdate') {
     return;
   }
-  // Unknown — already logged above.
 }
 
 function handleSuggestedAction(action: SuggestedActionEvent): void {
   if (!conversation || !ui) return;
-  // Show the user's selection as if they typed it.
   ui.appendUserMessage(action.title || action.value);
   ui.setTyping(true);
   void conversation
@@ -76,8 +80,6 @@ function handleAdaptiveSubmit(data: unknown): void {
   void conversation
     .sendActivity({
       type: 'message',
-      // Per Bot Framework convention, Action.Submit data goes in `value` and
-      // CS topics read it from there.
       value: data,
       text: ''
     })
@@ -107,7 +109,11 @@ async function sendUserContext(): Promise<void> {
           window.matchMedia('(prefers-color-scheme: dark)').matches
             ? 'dark'
             : 'light',
-        host: window.location.hostname
+        host: window.location.hostname,
+        brand: {
+          agentName: branding.agentName,
+          companyName: branding.companyName
+        }
       }
     });
   } catch (err) {
@@ -117,25 +123,32 @@ async function sendUserContext(): Promise<void> {
 }
 
 async function bootstrap(): Promise<void> {
-  ui = mountChatUi(root, {
-    onSend: async (text) => {
-      ui?.appendUserMessage(text);
-      ui?.setTyping(true);
-      try {
-        await conversation?.sendUserMessage(text);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        ui?.appendSystemMessage(`Error sending: ${message}`);
-      } finally {
-        ui?.setTyping(false);
-        ui?.focusInput();
-      }
-    }
-  });
+  // Apply branding before any pixels paint so the user never sees the
+  // default colors on first load.
+  applyBranding(branding);
 
-  ui.setTitle(AGENT_TITLE);
+  ui = mountChatUi(
+    root,
+    {
+      onSend: async (text) => {
+        ui?.appendUserMessage(text);
+        ui?.setTyping(true);
+        try {
+          await conversation?.sendUserMessage(text);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          ui?.appendSystemMessage(`Error sending: ${message}`);
+        } finally {
+          ui?.setTyping(false);
+          ui?.focusInput();
+        }
+      }
+    },
+    branding
+  );
+
   ui.enableInput(false);
-  ui.setStatus('Acquiring identity…', 'info');
+  ui.setStatus('Acquiring identity\u2026', 'info');
 
   const sso = await acquireToken();
   if (!sso.token) {
@@ -146,7 +159,7 @@ async function bootstrap(): Promise<void> {
     return;
   }
   const who = sso.account?.name ?? sso.account?.username ?? 'user';
-  ui.setStatus(`Signed in as ${who} via ${sso.source}. Connecting…`, 'info');
+  ui.setStatus(`Signed in as ${who} via ${sso.source}. Connecting\u2026`, 'info');
 
   try {
     conversation = await openConversation({
@@ -169,7 +182,6 @@ async function bootstrap(): Promise<void> {
   ui.enableInput(true);
   ui.focusInput();
 
-  // Send the one demo event hook: tell the topic who's signed in + locale.
   void sendUserContext();
 
   setTimeout(() => ui?.hideStatus(), 1500);

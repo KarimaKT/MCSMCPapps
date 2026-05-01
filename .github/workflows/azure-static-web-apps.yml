@@ -65,6 +65,16 @@ jobs:
           VITE_AAD_CLIENT_ID: ${{ secrets.VITE_AAD_CLIENT_ID }}
           VITE_AAD_AUTHORITY: ${{ secrets.VITE_AAD_AUTHORITY }}
           VITE_AAD_SCOPE: ${{ secrets.VITE_AAD_SCOPE }}
+          # Branding (all optional). Provide via repo secrets named the
+          # same way — missing values fall back to source defaults.
+          VITE_BRAND_AGENT_NAME: ${{ secrets.VITE_BRAND_AGENT_NAME }}
+          VITE_BRAND_AGENT_SUBTITLE: ${{ secrets.VITE_BRAND_AGENT_SUBTITLE }}
+          VITE_BRAND_LOGO: ${{ secrets.VITE_BRAND_LOGO }}
+          VITE_BRAND_COMPANY_NAME: ${{ secrets.VITE_BRAND_COMPANY_NAME }}
+          VITE_BRAND_ACCENT_COLOR: ${{ secrets.VITE_BRAND_ACCENT_COLOR }}
+          VITE_BRAND_ACCENT_FOREGROUND: ${{ secrets.VITE_BRAND_ACCENT_FOREGROUND }}
+          VITE_BRAND_FONT_FAMILY: ${{ secrets.VITE_BRAND_FONT_FAMILY }}
+          VITE_BRAND_PAGE_TITLE: ${{ secrets.VITE_BRAND_PAGE_TITLE }}
 
   close_pull_request:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
