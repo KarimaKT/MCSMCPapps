@@ -89,8 +89,15 @@ export function renderActivity(
   wrapper.className = 'msg msg-bot rich';
 
   // 1. Text → markdown
-  if (activity.text && activity.text.trim()) {
-    const html = marked.parse(activity.text, { async: false }) as string;
+  //    Suppress trivial "Generated file: foo.png" text if the same file
+  //    is also attached — the image itself is the better presentation.
+  const text = activity.text?.trim();
+  const skipText = !!(text && activity.attachments?.some((a) =>
+    a.name && new RegExp(`\\b${escapeRegExp(a.name)}\\b`).test(text)
+  ) && /^(generated file|here'?s the (chart|file|image)|chart|attached)\s*[:!.]?/i.test(text));
+
+  if (text && !skipText) {
+    const html = marked.parse(text, { async: false }) as string;
     const clean = DOMPurify.sanitize(html, PURIFY_CONFIG) as unknown as string;
     const textEl = document.createElement('div');
     textEl.className = 'msg-text';
@@ -126,6 +133,10 @@ export function renderActivity(
 }
 
 // ----- attachment dispatch -----
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 interface BfAttachment {
   contentType?: string;
