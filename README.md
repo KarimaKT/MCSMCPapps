@@ -77,6 +77,23 @@ Configure your CS agent for **Manual Entra (Microsoft) authentication** so it ca
 | **WebChat UI** | Renders Bot Framework Web Chat, authenticates the user, opens a Direct Line conversation with your CS agent. | Azure Static Web Apps |
 | **Copilot Studio agent** | All reasoning, topics, actions, long-running flows. | Power Platform / Copilot Studio |
 
+## Tenant topology
+
+This pattern intentionally **spans two tenants** — there is no requirement that hosting and identity live together:
+
+```text
+Azure tenant                       M365 / CS tenant (e.g. CDX)
+──────────────────────────       ────────────────────────────────
+  Static Web App                     Copilot Studio agent
+  (serves WebChat HTML+JS)           M365 Copilot host
+                                     Entra app registration (for SSO)
+                                     User identities
+```
+
+- The **Azure tenant** is just an HTTPS file host. Browsers fetch static assets cross-origin without auth.
+- The **CS / M365 tenant** is where all auth happens — the Entra app registration, the user identities, and the CS agent's auth config all live here.
+- The Entra **client ID + tenant ID** in `webchat-ui/.env` must point at the CS tenant, not the Azure tenant.
+
 ## Security notes
 
 - The MCP App iframe is sandboxed by the Copilot host. Treat it as an untrusted boundary.
