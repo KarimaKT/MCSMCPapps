@@ -4,38 +4,140 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Copilot Studio Embedded Chat</title>
+    <link rel="icon" href="data:," />
     <style>
-      html,
-      body,
-      #webchat {
-        height: 100%;
-        width: 100%;
-        margin: 0;
-        padding: 0;
-        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      :root {
+        --bg: #ffffff;
+        --bg-soft: #f4f5f7;
+        --bg-input: #ffffff;
+        --fg: #1a1a1a;
+        --fg-muted: #5b5d62;
+        --border: #e2e3e6;
+        --bubble-user: #0078d4;
+        --bubble-user-fg: #ffffff;
+        --bubble-bot: #f1f3f5;
+        --bubble-bot-fg: #111111;
+        --bubble-system: transparent;
+        --bubble-system-fg: #5b5d62;
+        --status-info: #f4f5f7;
+        --status-ok: #e6f4ea;
+        --status-error: #fde7e9;
+        --status-error-fg: #8b0000;
+        --shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
       }
-      #status {
-        padding: 0.5rem 1rem;
-        font-size: 0.85rem;
-        color: #555;
-        background: #f4f4f6;
-        border-bottom: 1px solid #e2e2e6;
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1a1a1a;
+          --bg-soft: #232427;
+          --bg-input: #2a2b2e;
+          --fg: #f5f5f6;
+          --fg-muted: #b3b5b9;
+          --border: #383a3e;
+          --bubble-bot: #2a2b2e;
+          --bubble-bot-fg: #f5f5f6;
+          --bubble-system-fg: #b3b5b9;
+          --status-info: #2a2b2e;
+          --status-ok: #1f3a25;
+          --status-error: #4a2025;
+          --status-error-fg: #ffb4b9;
+        }
       }
-      #status[data-state="error"] {
-        background: #fde7e9;
-        color: #8b0000;
+      * { box-sizing: border-box; }
+      html, body, #app {
+        height: 100%; width: 100%; margin: 0; padding: 0;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        font-size: 14px; line-height: 1.5;
+        background: var(--bg); color: var(--fg);
       }
+      .chat-frame {
+        display: flex; flex-direction: column; height: 100%;
+      }
+      .chat-header {
+        flex: 0 0 auto; padding: 0.5rem 1rem;
+        border-bottom: 1px solid var(--border); background: var(--bg-soft);
+        display: flex; flex-direction: column; gap: 0.25rem;
+      }
+      .chat-title { font-weight: 600; }
+      .chat-status {
+        font-size: 0.8rem; color: var(--fg-muted);
+        padding: 0.25rem 0.5rem; border-radius: 4px;
+        background: var(--status-info);
+      }
+      .chat-status[data-level="ok"] { background: var(--status-ok); }
+      .chat-status[data-level="error"] {
+        background: var(--status-error); color: var(--status-error-fg);
+      }
+      .chat-status[hidden] { display: none; }
+      .chat-log {
+        flex: 1 1 auto; overflow-y: auto; padding: 1rem;
+        display: flex; flex-direction: column; gap: 0.5rem;
+      }
+      .msg {
+        max-width: 75%; padding: 0.5rem 0.75rem; border-radius: 12px;
+        word-wrap: break-word; white-space: pre-wrap;
+      }
+      .msg-user {
+        align-self: flex-end;
+        background: var(--bubble-user); color: var(--bubble-user-fg);
+        border-bottom-right-radius: 4px;
+      }
+      .msg-bot {
+        align-self: flex-start;
+        background: var(--bubble-bot); color: var(--bubble-bot-fg);
+        border-bottom-left-radius: 4px;
+      }
+      .msg-system {
+        align-self: center; max-width: 90%;
+        background: var(--bubble-system); color: var(--bubble-system-fg);
+        font-style: italic; font-size: 0.85rem;
+        text-align: center;
+      }
+      .chat-typing {
+        flex: 0 0 auto; padding: 0 1rem 0.25rem;
+        display: flex; gap: 0.25rem;
+      }
+      .chat-typing[hidden] { display: none; }
+      .chat-typing .dot {
+        width: 6px; height: 6px; border-radius: 50%;
+        background: var(--fg-muted); opacity: 0.6;
+        animation: bounce 1.2s infinite;
+      }
+      .chat-typing .dot:nth-child(2) { animation-delay: 0.15s; }
+      .chat-typing .dot:nth-child(3) { animation-delay: 0.3s; }
+      @keyframes bounce {
+        0%, 60%, 100% { transform: translateY(0); }
+        30% { transform: translateY(-4px); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .chat-typing .dot { animation: none; }
+      }
+      .chat-form {
+        flex: 0 0 auto; display: flex; gap: 0.5rem;
+        padding: 0.5rem 1rem; border-top: 1px solid var(--border);
+        background: var(--bg-soft);
+      }
+      .chat-input {
+        flex: 1 1 auto; padding: 0.5rem 0.75rem;
+        border: 1px solid var(--border); border-radius: 999px;
+        background: var(--bg-input); color: var(--fg);
+        font: inherit;
+      }
+      .chat-input:focus {
+        outline: 2px solid var(--bubble-user); outline-offset: -1px;
+      }
+      .chat-input:disabled { opacity: 0.6; cursor: not-allowed; }
+      .chat-send {
+        padding: 0 1rem; min-width: 2.5rem;
+        border: none; border-radius: 999px;
+        background: var(--bubble-user); color: var(--bubble-user-fg);
+        font: inherit; cursor: pointer;
+      }
+      .chat-send:disabled { opacity: 0.4; cursor: not-allowed; }
+      .chat-send:not(:disabled):hover { filter: brightness(1.1); }
     </style>
   </head>
   <body>
-    <div id="status" role="status" aria-live="polite">Initialising…</div>
-    <div id="webchat" role="main" aria-label="Embedded Copilot Studio chat"></div>
-
-    <!-- Bot Framework Web Chat is shipped as a CDN script (smaller bundle). -->
-    <script
-      crossorigin="anonymous"
-      src="https://cdn.botframework.com/botframework-webchat/latest/webchat.js"
-    ></script>
+    <div id="app" role="main" aria-label="Embedded Copilot Studio chat"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

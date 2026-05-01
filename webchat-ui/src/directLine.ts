@@ -1,59 +1,97 @@
 /**
- * Direct Line connection helper.
+ * Copilot Studio transport — Wave-2 Direct Engine protocol.
  *
- * The browser MUST NOT hold the Direct Line secret. Instead it calls a
- * server-side token endpoint (your Copilot Studio agent's token URL) which
- * exchanges either:
- *   - the user's Entra access token (preferred), or
- *   - nothing (anonymous, dev only)
- * for a short-lived Direct Line token scoped to a single conversation.
+ * Uses `@microsoft/agents-copilotstudio-client` to:
+ *   - Open a streaming conversation against the CS Direct Engine endpoint
+ *     (env id + schema name from .env)
+ *   - Forward incoming Activities (messages, typing, events, suggested
+ *     actions) via the `onActivity` callback
+ *   - Send user messages back via `sendUserMessage(text)`
  *
- * We rely on `window.WebChat.createDirectLine` shipped by the Bot Framework
- * Web Chat CDN bundle.
+ * Auth is via a Power Platform API access token acquired by `auth.ts`.
+ * The CS service validates the bearer token's audience server-side.
  */
 
-export interface DirectLineParams {
-  /** The CS token endpoint, e.g. https://<region>.api.powerplatform.com/... */
-  tokenEndpoint: string;
-  /** Optional Entra access token to forward (Bearer). */
-  accessToken: string | null;
+import {
+  CopilotStudioClient,
+  ConnectionSettings,
+  PowerPlatformCloud
+} from '@microsoft/agents-copilotstudio-client';
+import type { Activity } from '@microsoft/agents-activity';
+
+export interface OpenConversationParams {
+  /** Power Platform environment GUID. */
+  environmentId: string;
+  /** Agent schema name (e.g. ksteam_ak001). */
+  schemaName: string;
+  /** Bearer access token for the Power Platform API. */
+  accessToken: string;
+  /** Called for every inbound activity. */
+  onActivity: (activity: Activity) => void;
+  /** Called when the underlying transport throws. */
+  onError: (err: Error) => void;
+  /** Power Platform cloud. Default = Prod. */
+  cloud?: PowerPlatformCloud;
 }
 
-interface TokenResponse {
-  token: string;
-  conversationId?: string;
-  expires_in?: number;
+export interface CsConversation {
+  /** Send a user message into the conversation. Resolves once the bot's
+   *  responses for this turn have been streamed. */
+  sendUserMessage(text: string): Promise<void>;
+  /** Conversation ID once known. */
+  readonly conversationId: string | undefined;
+  /** Stop streaming and release resources. */
+  close(): void;
 }
 
-async function fetchDirectLineToken(params: DirectLineParams): Promise<TokenResponse> {
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (params.accessToken) {
-    headers['authorization'] = `Bearer ${params.accessToken}`;
-  }
-  const res = await fetch(params.tokenEndpoint, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({})
+export async function openConversation(
+  params: OpenConversationParams
+): Promise<CsConversation> {
+  const settings = new ConnectionSettings({
+    environmentId: params.environmentId,
+    schemaName: params.schemaName,
+    cloud: params.cloud ?? PowerPlatformCloud.Prod
   });
-  if (!res.ok) {
-    throw new Error(
-      `Token endpoint returned ${res.status} ${res.statusText}. Verify VITE_CS_TOKEN_ENDPOINT and that the CS agent's auth mode matches.`
-    );
-  }
-  return (await res.json()) as TokenResponse;
-}
 
-export async function createDirectLine(params: DirectLineParams): Promise<unknown> {
-  if (!window.WebChat || typeof window.WebChat.createDirectLine !== 'function') {
-    throw new Error(
-      'Bot Framework Web Chat CDN script did not load. Check the <script src="https://cdn.botframework.com/..."> tag in index.html.'
-    );
+  const client = new CopilotStudioClient(settings, params.accessToken);
+  let closed = false;
+  let convId: string | undefined;
+
+  async function pump(stream: AsyncGenerator<Activity>): Promise<void> {
+    try {
+      for await (const activity of stream) {
+        if (closed) break;
+        if (!convId && activity.conversation?.id) {
+          convId = activity.conversation.id;
+        }
+        params.onActivity(activity);
+      }
+    } catch (err) {
+      if (!closed) {
+        params.onError(err instanceof Error ? err : new Error(String(err)));
+      }
+    }
   }
-  if (!params.tokenEndpoint) {
-    throw new Error(
-      'VITE_CS_TOKEN_ENDPOINT is empty. Set it in webchat-ui/.env (Copilot Studio → Settings → Channels → Direct Line → conversation token URL).'
-    );
-  }
-  const { token } = await fetchDirectLineToken(params);
-  return window.WebChat.createDirectLine({ token });
+
+  // Kick off the conversation. CS emits conversationUpdate + any greeting
+  // topic activities via this stream.
+  void pump(client.startConversationStreaming(true));
+
+  return {
+    get conversationId() {
+      return convId;
+    },
+    async sendUserMessage(text: string) {
+      if (closed) throw new Error('Conversation already closed.');
+      const activity = {
+        type: 'message',
+        text,
+        from: { id: 'user', role: 'user' }
+      } as unknown as Activity;
+      await pump(client.sendActivityStreaming(activity));
+    },
+    close() {
+      closed = true;
+    }
+  };
 }

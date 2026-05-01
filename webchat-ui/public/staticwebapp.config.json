@@ -12,7 +12,7 @@
     "X-Frame-Options": "ALLOWALL",
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-    "Content-Security-Policy": "default-src 'self'; script-src 'self' https://cdn.botframework.com 'unsafe-inline'; connect-src 'self' https://*.botframework.com https://directline.botframework.com https://*.api.powerplatform.com https://*.crm.dynamics.com https://login.microsoftonline.com https://login.microsoft.com; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; frame-ancestors https://*.cloud.microsoft https://*.office.com https://teams.microsoft.com https://*.teams.microsoft.com 'self';"
+    "Content-Security-Policy": "default-src 'self'; script-src 'self'; connect-src 'self' https://*.api.powerplatform.com https://*.crm.dynamics.com https://login.microsoftonline.com https://login.microsoft.com https://*.cloud.microsoft https://*.office.com; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; frame-ancestors https://*.cloud.microsoft https://*.office.com https://teams.microsoft.com https://*.teams.microsoft.com 'self';"
   },
   "mimeTypes": {
     ".json": "application/json"
