@@ -5,9 +5,12 @@
  *
  *   - The host (M365 Copilot today, ChatGPT Apps SDK tomorrow) only renders
  *     this HTML if the resource MIME type is exactly
- *     `text/html;profile=mcp-app`. Plain `text/html` is silently dropped \u2014
- *     you get a blank card. The MIME is set by the server in
- *     `index.ts`; we just have to honor it here.
+ *     `text/html+skybridge`. Plain `text/html` (and the spec-future
+ *     `text/html;profile=mcp-app`) are silently dropped \u2014 you get a blank
+ *     card. Verified against Microsoft's reference at
+ *     github.com/microsoft/mcp-interactiveUI-samples (oai-apps-sdk samples).
+ *     The MIME is set by the server in `index.ts`; we just have to honor it
+ *     here.
  *
  *   - The host delivers the tool's input + result into the widget iframe
  *     as JSON-RPC notifications over `postMessage` from `window.parent`:

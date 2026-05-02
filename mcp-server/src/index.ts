@@ -35,6 +35,12 @@ import { renderWidgetHtml } from './widget.js';
 
 const UI_RESOURCE_URI = 'ui://mcsmcpapps/chat';
 
+// MIME type the M365 Copilot / ChatGPT Apps SDK iframe runtime ("skybridge")
+// recognizes as a renderable widget. Verified against Microsoft's reference
+// at github.com/microsoft/mcp-interactiveUI-samples (oai-apps-sdk samples).
+// Plain 'text/html' is silently dropped — you get an empty card.
+const WIDGET_MIME_TYPE = 'text/html+skybridge';
+
 function buildServer(config: ServerConfig): McpServer {
   const server = new McpServer(
     { name: 'mcsmcpapps', version: '0.2.0' },
@@ -70,20 +76,22 @@ function buildServer(config: ServerConfig): McpServer {
       },
       annotations: {
         readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
         title: config.agentName
       },
       _meta: {
-        // OpenAI Apps SDK compatibility alias — this is what M365 Copilot
-        // actually reads today to know which UI template to load.
+        // OpenAI Apps SDK contract — verified against Microsoft's
+        // mcp-interactiveUI-samples (oai-apps-sdk reference).
         'openai/outputTemplate': UI_RESOURCE_URI,
-        // MCP Apps spec name — forward-compat for hosts that adopt MCP Apps.
+        'openai/widgetAccessible': true,
+        'openai/toolInvocation/invoking': `Opening ${config.agentName}…`,
+        'openai/toolInvocation/invoked': `${config.agentName} ready.`,
+        // MCP Apps spec name — forward-compat for hosts that adopt it.
         ui: {
           resourceUri: UI_RESOURCE_URI,
           preferredDisplayMode: 'inline'
-        },
-        // Status text shown by the host while the tool is running.
-        'openai/toolInvocation/invoking': `Opening ${config.agentName}…`,
-        'openai/toolInvocation/invoked': `${config.agentName} ready.`
+        }
       }
     },
     async (args) => {
@@ -97,51 +105,68 @@ function buildServer(config: ServerConfig): McpServer {
           }
         ],
         structuredContent: { userQuery },
-        _meta: { mcsmcpapps: { userQuery } }
+        _meta: {
+          // Microsoft's reference re-emits the same openai/* keys on the
+          // tool RESPONSE \u2014 not just the descriptor \u2014 so the host knows
+          // which template to render for this specific call.
+          'openai/outputTemplate': UI_RESOURCE_URI,
+          'openai/widgetAccessible': true,
+          'openai/toolInvocation/invoking': `Opening ${config.agentName}\u2026`,
+          'openai/toolInvocation/invoked': `${config.agentName} ready.`,
+          mcsmcpapps: { userQuery }
+        }
       };
     }
   );
 
   // ----- UI resource: the widget HTML -----
-  // MIME type MUST be exactly 'text/html;profile=mcp-app' — this is the
-  // signal that tells the M365 Copilot / ChatGPT widget host to actually
-  // render the HTML and enable the MCP Apps UI bridge. Anything else
-  // (including plain text/html) results in a blank card.
+  // MIME type MUST be exactly 'text/html+skybridge' — this is the signal
+  // that tells the M365 Copilot / ChatGPT widget host to render the HTML
+  // and enable the MCP Apps UI bridge. Anything else (including
+  // 'text/html' or 'text/html;profile=mcp-app') results in a blank card.
+  // Verified against Microsoft's oai-apps-sdk reference samples.
+  const resourceMeta = {
+    'openai/outputTemplate': UI_RESOURCE_URI,
+    'openai/widgetAccessible': true,
+    'openai/toolInvocation/invoking': `Opening ${config.agentName}…`,
+    'openai/toolInvocation/invoked': `${config.agentName} ready.`,
+    ui: {
+      domain: new URL(config.swaOrigin).origin,
+      prefersBorder: true,
+      csp: {
+        connectDomains: [
+          new URL(config.swaOrigin).origin,
+          'https://*.api.powerplatform.com',
+          'https://login.microsoftonline.com'
+        ],
+        resourceDomains: [new URL(config.swaOrigin).origin],
+        // REQUIRED: our widget iframes the SWA, so the SWA origin must be
+        // on the frame allowlist. Without this, sub-iframes are blocked
+        // by the sandbox by default.
+        frameDomains: [new URL(config.swaOrigin).origin]
+      }
+    }
+  } as const;
+
   server.registerResource(
     'chat-widget',
     UI_RESOURCE_URI,
     {
       title: `${config.agentName} \u2014 widget`,
       description: 'HTML widget that hosts the Copilot Studio WebChat.',
-      mimeType: 'text/html;profile=mcp-app',
-      _meta: {
-        ui: {
-          domain: new URL(config.swaOrigin).origin,
-          prefersBorder: true,
-          csp: {
-            connectDomains: [
-              new URL(config.swaOrigin).origin,
-              'https://*.api.powerplatform.com',
-              'https://login.microsoftonline.com'
-            ],
-            resourceDomains: [new URL(config.swaOrigin).origin],
-            // REQUIRED: our widget iframes the SWA, so the SWA origin
-            // must be on the frame allowlist. Without this, sub-iframes
-            // are blocked by the sandbox by default.
-            frameDomains: [new URL(config.swaOrigin).origin]
-          }
-        }
-      }
+      mimeType: WIDGET_MIME_TYPE,
+      _meta: resourceMeta
     },
     async () => ({
       contents: [
         {
           uri: UI_RESOURCE_URI,
-          mimeType: 'text/html;profile=mcp-app',
+          mimeType: WIDGET_MIME_TYPE,
           text: renderWidgetHtml({
             swaOrigin: config.swaOrigin,
             agentName: config.agentName
-          })
+          }),
+          _meta: resourceMeta
         }
       ]
     })
