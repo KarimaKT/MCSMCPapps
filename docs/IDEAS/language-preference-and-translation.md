@@ -122,3 +122,90 @@ This makes the agent feel:
 ## Why this is filed and not built now
 
 Translation introduces an LLM cost dependency, a cache to manage, language-detection edge cases, and significant CS topic surgery. None of that is needed for the demo we're shipping next. But it's a clean pattern and worth designing now while it's fresh; the WebChat already has the event hook to wire it in (`event: 'languagePreferenceSet'` is just a new name on the existing pipe).
+
+## Confirmed primitives — OnOutgoingMessage trigger works today
+
+The **single biggest unknown** in this design — "can a CS topic intercept every outgoing message and selectively rewrite it?" — is **answered yes**, and we have a working YAML that proves it.
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnOutgoingMessage
+  id: main
+  type: Message
+  actions:
+    - kind: SendActivity
+      id: sendActivity_es5XPC
+      activity: "{System.OutgoingActivity.Text} - Intercepted!"
+
+    - kind: SetVariable
+      id: setVariable_H98n47
+      variable: System.SendOutgoingActivity
+      value: false
+
+inputType: {}
+outputType: {}
+```
+
+What this gives us:
+
+| System surface | Read / written | Effect |
+|---|---|---|
+| `System.OutgoingActivity.Text` | Read | The full text of the message about to be sent. |
+| `System.SendOutgoingActivity` | Set to `false` | Suppresses the original message. We then send our rewritten version with `SendActivity`. |
+| `OnOutgoingMessage` trigger | — | Fires on every outbound message activity, including those produced by child agents and connected agents. |
+
+### Translation pipeline shape, now grounded
+
+With the primitive above, the translator topic becomes:
+
+```yaml
+kind: AdaptiveDialog
+beginDialog:
+  kind: OnOutgoingMessage
+  id: translateOutgoing
+  type: Message
+  actions:
+    # 1. Skip if no preference yet, or already in preferred language.
+    - kind: ConditionGroup
+      id: skipIfMatching
+      conditions:
+        - condition: =Global.PreferredLang = blank() or detectLanguage(System.OutgoingActivity.Text) = Global.PreferredLang
+          actions: []
+      elseActions:
+        # 2. Translate text-bearing nodes only; leave structure untouched.
+        - kind: InvokeFlowAction   # Power Automate flow that calls Azure Translator
+          id: translate
+          flowId: <translate-flow-id>
+          input:
+            text: =System.OutgoingActivity.Text
+            targetLanguage: =Global.PreferredLang
+          output:
+            translatedText: System.OutgoingActivity.Text
+
+        # 3. Send rewritten message; suppress original.
+        - kind: SendActivity
+          id: sendTranslated
+          activity: "{translatedText}"
+        - kind: SetVariable
+          id: suppressOriginal
+          variable: System.SendOutgoingActivity
+          value: false
+```
+
+### What still needs design work
+
+- **Adaptive Card walking.** `System.OutgoingActivity.Text` is the text body. Cards live in `System.OutgoingActivity.Attachments[]`. We need to confirm whether `OnOutgoingMessage` exposes a writable handle to attachments, or whether card translation requires a separate pre-render step.
+- **Suggested actions.** The button `title` strings should translate; `value` strings should not. Need to confirm whether `System.OutgoingActivity.SuggestedActions` is reachable.
+- **Cost short-circuit.** Detect-language-first to avoid translating already-correct messages. Power Automate's Azure Translator action returns the detected source language; can use that.
+- **Caching.** Same source + target should not be re-translated. Per-conversation in-memory dictionary is enough for a single session; Dataverse for cross-session.
+- **The user-facing language picker.** WebChat dropdown emits `languagePreferenceSet` event; a one-line CS topic listens and writes `Global.PreferredLang`.
+
+### Recommended next step when we pick this up
+
+Build a minimum-viable proof in three small CS topics:
+1. "Set language" — listens for the inbound event, writes `Global.PreferredLang`.
+2. "Translate outgoing" — the OnOutgoingMessage trigger above, with a Power Automate flow as the translator.
+3. "Greeting" — unchanged; bot replies in English; translator topic rewrites it on the way out.
+
+If step 2 works for plain text, expand to attachments. If it works for attachments, ship as a feature.
