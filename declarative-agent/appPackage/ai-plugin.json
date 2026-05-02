@@ -4,21 +4,17 @@
   "name_for_human": "MCSMCPapps MCP",
   "description_for_human": "Backs the Eurozone Analyst declarative agent with a remote MCP server.",
   "namespace": "mcsmcpapps",
-  "runtimes": [
-    {
-      "type": "RemoteMCPServer",
-      "auth": {
-        "type": "None"
-      },
-      "spec": {
-        "url": "https://app-mcsmcpapps-mcp.azurewebsites.net/mcp"
-      }
-    }
-  ],
   "functions": [
     {
       "name": "openCopilotStudioChat",
       "description": "Open the embedded Eurozone Analyst chat surface inside Microsoft 365 Copilot."
+    }
+  ],
+  "runtimes": [
+    {
+      "type": "RemoteMCPServer",
+      "url": "https://app-mcsmcpapps-mcp.azurewebsites.net/mcp",
+      "run_for_functions": ["openCopilotStudioChat"]
     }
   ]
 }
