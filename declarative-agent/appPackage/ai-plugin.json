@@ -6,7 +6,7 @@
   "namespace": "mcsmcpapps",
   "runtimes": [
     {
-      "type": "McpServer",
+      "type": "RemoteMCPServer",
       "auth": {
         "type": "None"
       },
