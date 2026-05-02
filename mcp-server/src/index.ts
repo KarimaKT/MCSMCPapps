@@ -73,10 +73,17 @@ function buildServer(config: ServerConfig): McpServer {
         title: config.agentName
       },
       _meta: {
+        // OpenAI Apps SDK compatibility alias — this is what M365 Copilot
+        // actually reads today to know which UI template to load.
+        'openai/outputTemplate': UI_RESOURCE_URI,
+        // MCP Apps spec name — forward-compat for hosts that adopt MCP Apps.
         ui: {
           resourceUri: UI_RESOURCE_URI,
           preferredDisplayMode: 'inline'
-        }
+        },
+        // Status text shown by the host while the tool is running.
+        'openai/toolInvocation/invoking': `Opening ${config.agentName}…`,
+        'openai/toolInvocation/invoked': `${config.agentName} ready.`
       }
     },
     async (args) => {
@@ -96,22 +103,32 @@ function buildServer(config: ServerConfig): McpServer {
   );
 
   // ----- UI resource: the widget HTML -----
+  // MIME type MUST be exactly 'text/html;profile=mcp-app' — this is the
+  // signal that tells the M365 Copilot / ChatGPT widget host to actually
+  // render the HTML and enable the MCP Apps UI bridge. Anything else
+  // (including plain text/html) results in a blank card.
   server.registerResource(
     'chat-widget',
     UI_RESOURCE_URI,
     {
       title: `${config.agentName} \u2014 widget`,
       description: 'HTML widget that hosts the Copilot Studio WebChat.',
-      mimeType: 'text/html',
+      mimeType: 'text/html;profile=mcp-app',
       _meta: {
         ui: {
+          domain: new URL(config.swaOrigin).origin,
+          prefersBorder: true,
           csp: {
             connectDomains: [
               new URL(config.swaOrigin).origin,
               'https://*.api.powerplatform.com',
               'https://login.microsoftonline.com'
             ],
-            resourceDomains: [new URL(config.swaOrigin).origin]
+            resourceDomains: [new URL(config.swaOrigin).origin],
+            // REQUIRED: our widget iframes the SWA, so the SWA origin
+            // must be on the frame allowlist. Without this, sub-iframes
+            // are blocked by the sandbox by default.
+            frameDomains: [new URL(config.swaOrigin).origin]
           }
         }
       }
@@ -120,7 +137,7 @@ function buildServer(config: ServerConfig): McpServer {
       contents: [
         {
           uri: UI_RESOURCE_URI,
-          mimeType: 'text/html',
+          mimeType: 'text/html;profile=mcp-app',
           text: renderWidgetHtml({
             swaOrigin: config.swaOrigin,
             agentName: config.agentName
