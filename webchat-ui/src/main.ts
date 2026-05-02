@@ -15,7 +15,7 @@
 
 import type { Activity } from '@microsoft/agents-activity';
 import { acquireToken } from './auth';
-import { openConversation, type CsConversation } from './directLine';
+import { openConversation, type CsConversation } from './csTransport';
 import { mountChatUi, type ChatUi } from './chatUi';
 import { renderActivity, type SuggestedActionEvent } from './messageRenderer';
 import { applyBranding, getBranding } from './branding';
