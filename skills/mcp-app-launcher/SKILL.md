@@ -164,7 +164,8 @@ Key trade-offs to call out to the builder:
 
 A working scaffold lives at <https://github.com/KarimaKT/MCSMCPapps>. For a new builder, start them with:
 
-- `docs/FINAL-RECIPE.md` — the 8 ingredients + 12 commandments + one-screen architecture (read this first)
+- `docs/WHAT-IS-THIS.md` — terminology disambiguation. Always send this first when the builder confuses Agent Builder vs Copilot Studio vs M365 Agents SDK vs Bot Framework, or asks "can I build this in the no-code UI?". The answer is **no, the Agent Builder UI does not expose MCP / `RemoteMCPServer` runtime configuration today.**
+- `docs/FINAL-RECIPE.md` — the 8 ingredients + 12 commandments + one-screen architecture
 - `docs/M365-COPILOT-ONLY-DEPLOYMENT.md` — foolproof rollout when the customer requirement is "M365 Copilot only, not Teams". Includes capability-block permutation table, foolproof manifest template, 7-check verification protocol, CI guard, and a security-review-ready summary table.
 - `docs/BUILD-GUIDE.md` — long-form step-by-step (no AI required)
 - `docs/AUTH-ARCHITECTURE.md` — the trust boundaries diagram
