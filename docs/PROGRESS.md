@@ -9,7 +9,7 @@ Living record of what's been done and what's next. Updated at the end of every p
 | 2 | Copilot Studio agent IDs | ✅ Done | Bot ID, Environment ID, **CDX tenant ID** captured (see [IDs.md](IDs.md)). Tenant expires Aug 2026. Schema name + Direct Line endpoint still TBD — captured later when we wire auth. |
 | 3 | WebChat UI build | ✅ Done | Vite + TS + Bot Framework Web Chat (CDN) + MSAL + Teams JS scaffolded. `npm run build` and `npm run typecheck` both pass. SSO chain Teams JS → MSAL silent → anonymous fallback. |
 | 4 | Azure subscription + SWA host | ✅ Done | SWA `swa-mcsmcpapps` deployed in `rg-mcsmcpapps` (westus2). Hostname: `icy-field-07d5bef1e.7.azurestaticapps.net`. GitHub Actions deploy token set as repo secret `AZURE_STATIC_WEB_APPS_API_TOKEN`. |
-| 5 | MCP App tool + DA manifest | ⏳ Pending | M365 Agents Toolkit packaging, sideload via VS Code. |
+| 5 | MCP App tool + DA manifest | ⚠️ Blocked / under investigation | DA Schema 1.6 (current) does not appear to have an "MCP App" capability. Only documented action type is `actions[]` referencing API plugin manifests. The "MCP App" wording in the source design doc may need to map to either: (a) a future capability not yet documented, (b) an `actions[].file` API plugin pointing at our SWA, or (c) a richer `worker_agents` pattern. Need to confirm intent before building. |
 | 6 | End-to-end test | ⏳ Pending | All ☑️ rows in BUILD-GUIDE §8 must pass. |
 | 7 | Polish skill + docs | 🔄 ongoing | `CAPABILITIES.md` written. Live-agent handoff SDK scaffolded under `webchat-ui/src/handoff/` (orchestrator + generic webhook provider; customer plugs in their broker). Skill updated. |
 
