@@ -1,0 +1,27 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/copilot/declarative-agent/v1.6/schema.json",
+  "version": "v1.6",
+  "name": "Eurozone Analyst",
+  "description": "Embeds the Eurozone Analyst Copilot Studio agent inside Microsoft 365 Copilot as a UI widget.",
+  "instructions": "When the user asks to open the Eurozone Analyst, view the chart, run a scenario, ask about Euro-area economics, or use any words that suggest opening the embedded chat (\"open my agent\", \"launch the analyst\", \"show me the report\"), call the openCopilotStudioChat tool. Do NOT paraphrase, summarize, or narrate the tool's output. The tool returns a UI widget that takes over the response surface; let it render directly. For unrelated questions, respond normally without invoking the tool.",
+  "conversation_starters": [
+    {
+      "title": "Open the analyst",
+      "text": "Open my Eurozone analyst"
+    },
+    {
+      "title": "Latest brief",
+      "text": "Brief me on the Eurozone economy this quarter"
+    },
+    {
+      "title": "Run a scenario",
+      "text": "Run a scenario in the analyst"
+    }
+  ],
+  "actions": [
+    {
+      "id": "mcsmcpappsMcp",
+      "file": "ai-plugin.json"
+    }
+  ]
+}
