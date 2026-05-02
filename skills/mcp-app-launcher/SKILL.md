@@ -112,16 +112,25 @@ In Copilot Studio, set **Settings → Security → Authentication → Manual (Mi
 
 ## Common gotchas to warn the builder about
 
+These are the failures that cost real time during the reference build. Surface them up front when you advise a new project.
+
+### Manifest schema gotchas (the big ones; 4 build-and-publish cycles lost to these)
+
+1. **Plugin manifest schema is `v2.4`, not `v2.3`.** `v2.3` does not define `RemoteMCPServer` at all; the validator firing both "unrecognized member" + "required member missing" together means "wrong schema version".
+2. **`runtimes[0].type === 'RemoteMCPServer'`** — capital M, capital C, capital P, capital S. Validator is case-sensitive.
+3. **`url` lives under `runtime.spec.url`**, not at the runtime level.
+4. **`runtime.run_for_functions` is required** with at least one element, even with a single tool.
+5. **`runtime.auth.type === 'None'`** for anonymous; the field is required.
+6. **Teams app `version` must not start with `0`**. Tenant-catalog publish rejects `0.x.y`. Start at `1.0.0`.
+
+### Identity / consent gotchas
+
 - **Two independent auth boundaries.** The MCP server's auth and the chat's auth are unrelated. Anonymous MCP is fine; the WebChat still does Entra SSO at the chat boundary. New builders confuse these constantly. See `docs/AUTH-ARCHITECTURE.md` in the reference repo.
 - **Power Platform API service principal must exist in the CS tenant.** If "Power Platform API" doesn't show up in the API permission picker, register it via Graph PowerShell (`New-MgServicePrincipal -AppId 8578e004-...`).
-- **Tool name case-sensitivity.** The tool name in the DA manifest must match the MCP server tool name exactly (`openCopilotStudioChat`).
-- **Widget renderer host CSP.** Add `https://{hashed-mcp-domain}.widget-renderer.usercontent.microsoft.com` to the SPA's `frame-ancestors` directive. Generate the hashed URL via <https://aka.ms/mcpwidgeturlgenerator>.
-- **`VITE_*` are build-time.** Changing them in SWA Configuration requires a workflow re-run.
-- **CEA coexistence.** The DA is a separate Copilot Extension — it appears next to the CEA in the agent picker. Both are independently sideloadable.
-- **Token TTL.** MSAL access tokens expire (~60 min). Implement refresh or your conversation drops mid-flow.
-- **Tenant admin gate.** Sideloading a Declarative Agent in a managed tenant usually requires the tenant admin to allow the app in Teams Admin Center. CDX tenants typically allow it by default.
-- **Image attachments.** Wave-2 CS agents often inline images as `data:image/png;base64,...` in `attachment.contentUrl`. Renderers must allow `data:` URLs in the CSP `img-src`. For images >500 KB, recommend switching the topic to upload to Blob Storage and return SAS URLs instead.
-- **Branding is build-time only.** Do NOT recommend runtime rebrand events. Branding is the maker's single source of truth, configured via `VITE_BRAND_*` env vars.
+- **The required scope is `https://api.powerplatform.com/CopilotStudio.Copilots.Invoke`**, admin-consented. Without it, every CS call returns 403.
+- **Tenant admin gate.** Sideloading in a managed tenant requires admin to allow the app in Teams Admin Center. CDX tenants typically allow it by default.
+
+### Runtime gotchas
 
 ## What this skill does NOT cover
 
@@ -153,7 +162,12 @@ Key trade-offs to call out to the builder:
 
 ## Reference implementation
 
-A working scaffold lives at <https://github.com/KarimaKT/MCSMCPapps>. Send the user the README and the `docs/BUILD-GUIDE.md` for the no-AI step-by-step.
+A working scaffold lives at <https://github.com/KarimaKT/MCSMCPapps>. For a new builder, start them with:
+
+- `docs/FINAL-RECIPE.md` — the 8 ingredients + 12 commandments + one-screen architecture (read this first)
+- `docs/BUILD-GUIDE.md` — long-form step-by-step (no AI required)
+- `docs/AUTH-ARCHITECTURE.md` — the trust boundaries diagram
+- `docs/UI-POSSIBILITIES.md` — menu of UI features the maker can add
 
 ## Closing checklist (give this to the user)
 
