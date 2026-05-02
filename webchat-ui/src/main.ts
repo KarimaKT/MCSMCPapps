@@ -20,11 +20,36 @@ import { mountChatUi, type ChatUi } from './chatUi';
 import { renderActivity, type SuggestedActionEvent } from './messageRenderer';
 import { applyBranding, getBranding } from './branding';
 
+const FIRST_MESSAGE_TYPE = 'mcsmcpapps:firstMessage';
+const READY_TYPE = 'mcsmcpapps:ready';
+
+/** Origins we accept queued first messages from. Includes the Microsoft-managed
+ *  widget renderer host (any subdomain) and same-origin (for local dev). */
+function isAllowedParentOrigin(origin: string): boolean {
+  if (origin === window.location.origin) return true;
+  try {
+    const u = new URL(origin);
+    if (u.protocol !== 'https:') return false;
+    return (
+      u.hostname.endsWith('.widget-renderer.usercontent.microsoft.com') ||
+      u.hostname.endsWith('.cloud.microsoft') ||
+      u.hostname === 'm365.cloud.microsoft' ||
+      u.hostname === 'copilot.microsoft.com'
+    );
+  } catch {
+    return false;
+  }
+}
+
 const root = document.getElementById('app') ?? document.body;
 
 let ui: ChatUi | null = null;
 let conversation: CsConversation | null = null;
 const branding = getBranding();
+
+/** Queued first message captured from the widget host before the CS
+ *  conversation was open. Sent as the first user turn the moment we connect. */
+let pendingFirstMessage: string | null = null;
 
 function handleActivity(activity: Activity): void {
   if (!ui) return;
@@ -147,6 +172,26 @@ async function bootstrap(): Promise<void> {
     branding
   );
 
+  // Listen for the queued first message from the parent widget host.
+  // Hook this BEFORE doing async work so we don't miss the post.
+  window.addEventListener('message', (e) => {
+    if (!isAllowedParentOrigin(e.origin)) return;
+    const data = e.data as { type?: string; text?: string } | undefined;
+    if (!data || data.type !== FIRST_MESSAGE_TYPE) return;
+    if (typeof data.text !== 'string' || data.text.length === 0) return;
+    pendingFirstMessage = data.text;
+    // If we're already connected, drain immediately. Otherwise the post-
+    // connect block below will pick it up.
+    void drainPendingFirstMessage();
+  });
+  // Tell the parent we're ready to receive. Posting to '*' is safe here
+  // because the parent verifies our origin on receive.
+  try {
+    window.parent?.postMessage({ type: READY_TYPE }, '*');
+  } catch {
+    /* not embedded */
+  }
+
   ui.enableInput(false);
   ui.setStatus('Acquiring identity\u2026', 'info');
 
@@ -183,8 +228,29 @@ async function bootstrap(): Promise<void> {
   ui.focusInput();
 
   void sendUserContext();
+  // Drain any queued first message now that the conversation is open.
+  void drainPendingFirstMessage();
 
   setTimeout(() => ui?.hideStatus(), 1500);
+}
+
+/** Sends the queued first message (if any) as the user's first turn,
+ *  exactly as if the user had typed it. Idempotent. */
+async function drainPendingFirstMessage(): Promise<void> {
+  if (!pendingFirstMessage || !conversation || !ui) return;
+  const text = pendingFirstMessage;
+  pendingFirstMessage = null;
+  ui.appendUserMessage(text);
+  ui.setTyping(true);
+  try {
+    await conversation.sendUserMessage(text);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    ui.appendSystemMessage(`Error sending first message: ${message}`);
+  } finally {
+    ui.setTyping(false);
+    ui.focusInput();
+  }
 }
 
 bootstrap().catch((err: unknown) => {
