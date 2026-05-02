@@ -1,0 +1,55 @@
+name: Manifest scope check (M365 Copilot only)
+
+# Enforces the customer commitment that the agent NEVER appears in Teams,
+# Outlook, or Office add-ins. Inspects manifest.json on every push/PR for
+# capability blocks that would surface the app outside Microsoft 365 Copilot.
+#
+# See docs/M365-COPILOT-ONLY-DEPLOYMENT.md for the full rationale and the
+# full permutation table.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'declarative-agent/appPackage/manifest.json'
+      - '.github/workflows/manifest-scope-check.yml'
+  pull_request:
+    paths:
+      - 'declarative-agent/appPackage/manifest.json'
+      - '.github/workflows/manifest-scope-check.yml'
+
+jobs:
+  copilot-only:
+    runs-on: ubuntu-latest
+    name: Verify Copilot-only scope
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject non-Copilot capability blocks
+        run: |
+          node -e "
+          const fs = require('fs');
+          const m = JSON.parse(fs.readFileSync('declarative-agent/appPackage/manifest.json', 'utf8'));
+          const forbidden = [
+            'bots',                       // Teams chat bot
+            'staticTabs',                 // Teams personal tab / Outlook tab
+            'configurableTabs',           // Teams team / channel tab
+            'composeExtensions',          // Teams + Outlook message extension
+            'meetingExtensionDefinition', // Teams meetings
+            'extensions',                 // Office add-ins (Word/Excel/PPT/Outlook)
+            'connectors',                 // Teams connectors
+            'webApplicationInfo'          // OAuth identity for Teams app
+          ];
+          const leaked = forbidden.filter(k => Object.prototype.hasOwnProperty.call(m, k));
+          if (leaked.length > 0) {
+            console.error('FAIL — manifest leaks non-Copilot surfaces:', leaked);
+            console.error('See docs/M365-COPILOT-ONLY-DEPLOYMENT.md for the rules.');
+            process.exit(1);
+          }
+          if (!(m.copilotAgents && Array.isArray(m.copilotAgents.declarativeAgents) && m.copilotAgents.declarativeAgents.length > 0)) {
+            console.error('FAIL — manifest does not declare a copilotAgents.declarativeAgents block.');
+            process.exit(1);
+          }
+          console.log('PASS — manifest is M365 Copilot only.');
+          console.log('  declarativeAgents:', m.copilotAgents.declarativeAgents.map(a => a.id || a.file).join(', '));
+          "
