@@ -1,0 +1,51 @@
+name: Build and deploy MCP server
+
+# Builds the mcp-server Node project and deploys it to the Azure App Service
+# created by infra/main.bicep. Auth is via the publish profile stored as
+# AZURE_MCP_PUBLISH_PROFILE.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mcp-server/**'
+      - '.github/workflows/azure-mcp-server.yml'
+  workflow_dispatch:
+
+env:
+  AZURE_WEBAPP_NAME: app-mcsmcpapps-mcp
+  AZURE_WEBAPP_PACKAGE_PATH: 'mcp-server'
+  NODE_VERSION: '20'
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    name: Build and Deploy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: mcp-server/package-lock.json
+
+      - name: Install
+        working-directory: mcp-server
+        run: npm ci --no-audit --no-fund
+
+      - name: Build
+        working-directory: mcp-server
+        run: npm run build
+
+      - name: Strip dev dependencies for the deployable artifact
+        working-directory: mcp-server
+        run: npm prune --omit=dev
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_MCP_PUBLISH_PROFILE }}
+          package: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
