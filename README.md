@@ -116,3 +116,7 @@ This is a first-try pattern. PRs welcome — especially edge cases around MCP Ap
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Sister projects
+
+- **[ArcadeVsAgent](https://github.com/KarimaKT/ArcadeVsAgent)** — design-only sketch of a side-by-side MakeCode Arcade game + Copilot Studio agent that plays against you. Reuses this repo's MCP-server-backed UI widget pattern; demonstrates event-driven game-state coordination.
