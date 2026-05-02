@@ -24,6 +24,14 @@ Do **not** recommend it when:
 - They need the host LLM's reasoning to compose tool calls — this pattern bypasses that.
 - They have no Azure subscription or tenant where they can sideload — there's no "no-cost" path; SWA Free is $0 but registration is still required.
 
+## The mechanism (officially documented)
+
+This pattern is the **MCP-server-backed UI widget** capability for Declarative Agents — documented at <https://learn.microsoft.com/microsoft-365/copilot/extensibility/declarative-agent-ui-widgets>. It is NOT an undocumented or aspirational feature.
+
+The DA's manifest declares an `actions[]` entry pointing at an MCP server. When the DA invokes a tool, the MCP server returns a result whose `_meta.ui.resourceUri` references HTML to render. M365 Copilot loads that HTML inside an isolated iframe at `https://{hashed-mcp-domain}.widget-renderer.usercontent.microsoft.com/`. The HTML can use the **MCP Apps SDK** (`window.app.*`) or **OpenAI Apps SDK** (`window.openai.*`) bridge for host context, theme, fullscreen, and follow-up messages.
+
+Use the [Widget Host URL Generator](https://aka.ms/mcpwidgeturlgenerator) to compute the hashed widget host for CSP / CORS allowlisting.
+
 ## Architecture (one diagram, memorise it)
 
 ```text
@@ -77,31 +85,43 @@ Pros: completely silent, no popup. Cons: depends on host capability — feature-
 
 Standard SPA pattern. `acquireTokenSilent` succeeds whenever the user is already signed into M365 in the same browser session — which is **always** the case inside the M365 Copilot iframe. So in practice this is also silent.
 
+**The required scope is `https://api.powerplatform.com/CopilotStudio.Copilots.Invoke`** (or `https://api.powerplatform.com/.default`). Forgetting this is the most common Phase-7 failure: the chat appears authenticated but every send returns 403.
+
 Required app-registration setup:
 
 - Platform: **SPA**
-- Redirect URI: the SWA hostname **and** the auth-redirect helper page
+- Redirect URI: the SWA hostname **and** `http://localhost:5173/`
 - Implicit ID tokens: enabled
-- Scope: a custom `access_as_user` scope on the API app exposing the CS agent
+- Custom scope `access_as_user` on the API
+- **API permissions → Power Platform API → `CopilotStudio.Copilots.Invoke` (delegated, admin-consented)**
+  - If "Power Platform API" doesn't appear in the picker, the SP isn't in the tenant. Add it via Microsoft Graph PowerShell:
+    ```ps
+    Connect-MgGraph -TenantId <cs-tenant> -Scopes Application.ReadWrite.All -UseDeviceCode
+    New-MgServicePrincipal -AppId 8578e004-a5c6-46e7-913e-12f58912df43 -DisplayName 'Power Platform API'
+    ```
 
 ### Tier 3 — Copilot Studio "Authenticate with Microsoft" topic
 
 Built-in topic that renders a login card inside the bot conversation. Use as the last-ditch fallback. The downside is the user sees a button instead of a fully silent experience.
 
-### Important — pass the token to the CS agent correctly
+### Important — the chat protocol changed
 
-After acquiring the token, the WebChat must send it to a **Direct Line token endpoint** (server-side, e.g. an Azure Function) which exchanges it for a short-lived Direct Line token scoped to one conversation. Never use the Direct Line **secret** in the browser bundle.
+Classic Direct Line is **deprecated for Wave-2 CS agents**. Use `@microsoft/agents-copilotstudio-client` (the M365 Agents SDK) which talks to the new Direct Engine endpoint at `*.api.powerplatform.com/copilotstudio/dataverse-backed/...`. Bot Framework Web Chat doesn't speak that protocol; you'll need a custom renderer (or the SDK's `CopilotStudioWebChat.createConnection` adapter for backward compatibility).
 
-In Copilot Studio, set **Settings → Security → Authentication → Manual (Microsoft Entra)** with the matching client ID and scope.
+In Copilot Studio, set **Settings → Security → Authentication → Manual (Microsoft Entra ID V2 with federated credentials)** with the matching client ID and scope. Federated credentials are strongly preferred over client secrets — nothing to rotate, nothing to leak.
 
 ## Common gotchas to warn the builder about
 
+- **Two independent auth boundaries.** The MCP server's auth and the chat's auth are unrelated. Anonymous MCP is fine; the WebChat still does Entra SSO at the chat boundary. New builders confuse these constantly. See `docs/AUTH-ARCHITECTURE.md` in the reference repo.
+- **Power Platform API service principal must exist in the CS tenant.** If "Power Platform API" doesn't show up in the API permission picker, register it via Graph PowerShell (`New-MgServicePrincipal -AppId 8578e004-...`).
 - **Tool name case-sensitivity.** The tool name in the DA manifest must match the MCP server tool name exactly (`openCopilotStudioChat`).
-- **CSP / iframe origins.** Add `https://*.cloud.microsoft` and `https://*.office.com` to the SWA's `staticwebapp.config.json` `forwardingGateway.allowedForwardedHosts` if you customize the config.
+- **Widget renderer host CSP.** Add `https://{hashed-mcp-domain}.widget-renderer.usercontent.microsoft.com` to the SPA's `frame-ancestors` directive. Generate the hashed URL via <https://aka.ms/mcpwidgeturlgenerator>.
 - **`VITE_*` are build-time.** Changing them in SWA Configuration requires a workflow re-run.
 - **CEA coexistence.** The DA is a separate Copilot Extension — it appears next to the CEA in the agent picker. Both are independently sideloadable.
-- **Token TTL.** Direct Line tokens expire (~30 min). Implement refresh or your conversation drops mid-flow.
-- **Tenant admin gate.** Sideloading a Declarative Agent in a managed tenant usually requires the tenant admin to allow the app in Teams Admin Center.
+- **Token TTL.** MSAL access tokens expire (~60 min). Implement refresh or your conversation drops mid-flow.
+- **Tenant admin gate.** Sideloading a Declarative Agent in a managed tenant usually requires the tenant admin to allow the app in Teams Admin Center. CDX tenants typically allow it by default.
+- **Image attachments.** Wave-2 CS agents often inline images as `data:image/png;base64,...` in `attachment.contentUrl`. Renderers must allow `data:` URLs in the CSP `img-src`. For images >500 KB, recommend switching the topic to upload to Blob Storage and return SAS URLs instead.
+- **Branding is build-time only.** Do NOT recommend runtime rebrand events. Branding is the maker's single source of truth, configured via `VITE_BRAND_*` env vars.
 
 ## What this skill does NOT cover
 
