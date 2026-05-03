@@ -65,19 +65,32 @@ function readPpToken(payload: unknown): string | null {
 }
 
 /**
- * Look for the server-side diagnostic block at
- * `_meta.mcsmcpapps.diag`. Always present when the tool was invoked
- * regardless of OBO success — used to debug end-to-end auth without
- * needing App Service stdout.
+ * Look for the server-side diagnostic block.
+ *
+ * The MCP server places it in two redundant locations on the tool
+ * response:
+ *   - `_meta.mcsmcpapps.diag` — primary
+ *   - `structuredContent.diag` — fallback, in case the host strips
+ *     unrecognized `_meta` keys before forwarding to the widget
+ *
+ * Always present when the tool was invoked regardless of OBO success —
+ * used to debug end-to-end auth without needing App Service stdout.
  */
 function readToolDiag(payload: unknown): Record<string, unknown> | null {
   if (!payload || typeof payload !== 'object') return null;
   const obj = payload as Record<string, unknown>;
+  // Primary: `_meta.mcsmcpapps.diag`
   const meta = obj._meta as Record<string, unknown> | undefined;
   const ns = meta?.mcsmcpapps as Record<string, unknown> | undefined;
-  const diag = ns?.diag;
-  if (diag && typeof diag === 'object') {
-    return diag as Record<string, unknown>;
+  const fromMeta = ns?.diag;
+  if (fromMeta && typeof fromMeta === 'object') {
+    return fromMeta as Record<string, unknown>;
+  }
+  // Fallback: `structuredContent.diag`
+  const sc = obj.structuredContent as Record<string, unknown> | undefined;
+  const fromSc = sc?.diag;
+  if (fromSc && typeof fromSc === 'object') {
+    return fromSc as Record<string, unknown>;
   }
   return null;
 }

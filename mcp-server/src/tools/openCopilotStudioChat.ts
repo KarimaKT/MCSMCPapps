@@ -175,7 +175,10 @@ export function registerOpenCopilotStudioChatTool(
         ],
         // structuredContent surfaces userQuery to the widget via
         // `window.openai.toolOutput` and JSON-RPC `ui/notifications/tool-result`.
-        structuredContent: { userQuery },
+        // We also include the diag block redundantly here in case the
+        // host strips unrecognized keys from `_meta` before forwarding
+        // to the widget.
+        structuredContent: { userQuery, diag },
         // _meta on the response tells the host which template to mount
         // for THIS specific call (Microsoft's reference re-emits the same
         // openai/* keys that appear on the descriptor) plus the OBO'd

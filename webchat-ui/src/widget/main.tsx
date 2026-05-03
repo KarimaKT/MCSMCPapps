@@ -253,11 +253,19 @@ function App() {
 
 const container = document.getElementById('root');
 if (container) {
-  // React owns #root from this point. Strip the inline boot-marker so it
-  // doesn't visually overlay the chat. The trace stream still fires.
+  // Make the boot-marker fade out instead of being removed instantly.
+  // Helps when the marker scrolls past too fast to read. After 6s it's
+  // detached entirely; React-rendered chat is below it via z-index.
   const marker = document.getElementById('boot-marker');
-  if (marker && marker.parentNode === container) {
-    container.removeChild(marker);
+  if (marker) {
+    marker.classList.add('fading');
+    window.setTimeout(() => {
+      try {
+        marker.parentNode?.removeChild(marker);
+      } catch {
+        // ignore
+      }
+    }, 6000);
   }
   trace('react-render-start');
   // React 16 API. Microsoft's webchat-react sample also pins 16 because
