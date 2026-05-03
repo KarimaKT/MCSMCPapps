@@ -17,7 +17,7 @@ works.
 This file is the recipe. If you change anything in `mcp-server/src/index.ts` or
 `mcp-server/src/widget.ts`, re-read this first.
 
-## The five things you have to get exactly right
+## The six things you have to get exactly right
 
 ### 1. Resource MIME type MUST be `text/html+skybridge`
 
@@ -150,6 +150,88 @@ M365 Copilot ALSO exposes a snapshot at `window.openai.toolInput` / `window.open
 and re-fires `openai:set_globals` events when those change. Listen to **both** for portability —
 see `mcp-server/src/widget.ts` for the reference implementation.
 
+### 6. Widget HTML must be sandbox-friendly: strip `crossorigin`, use production mode
+
+This one is the **single most overlooked detail**. Even with the right MIME, the right `_meta`,
+and the right CSP, your single-file widget will load as bytes but never execute if the bundler
+left any of the following in the HTML:
+
+#### `crossorigin` attribute on `<script>` tags
+
+Vite (and most modern bundlers) emit this by default for module scripts:
+
+```html
+<script type="module" crossorigin>...</script>
+```
+
+But sandboxed iframes (skybridge, ChatGPT Apps) have a **null origin**. The browser performs a
+CORS check on inline scripts marked `crossorigin`, sees null, and silently refuses to execute.
+The iframe loads (HTML body present, ~5 MB downloaded) but the React app never mounts. **You see
+a blank card with no diagnostic.**
+
+Microsoft's `mcp-interactiveUI-samples` reference
+([oai-apps-sdk/trey-research/node/src/mcpserver/widgets/build.mts](https://github.com/microsoft/mcp-interactiveUI-samples/blob/main/oai-apps-sdk/trey-research/node/src/mcpserver/widgets/build.mts))
+strips this attribute via a tiny post-transform Vite plugin. Copy it verbatim:
+
+```ts
+function stripCrossorigin(): Plugin {
+  return {
+    name: 'strip-crossorigin',
+    enforce: 'post',
+    transformIndexHtml(html) {
+      return html.replace(
+        /<script([^>]*)\s+crossorigin(?:="[^"]*")?/g,
+        '<script$1'
+      );
+    }
+  };
+}
+```
+
+Register it BEFORE `viteSingleFile()` so the post-transform runs on the original `<script>` tags.
+
+#### Production mode (no eval / new Function)
+
+Vite's default dev mode emits HMR + dev-only code that uses `eval` and `new Function()`. The
+skybridge sandbox CSP blocks both. Even if you're running `vite build`, set this explicitly to
+be safe:
+
+```ts
+export default defineConfig({
+  mode: 'production',
+  define: { 'process.env.NODE_ENV': JSON.stringify('production') },
+  build: { minify: 'esbuild' }
+});
+```
+
+The `define` block forces React (and any code reading `process.env.NODE_ENV`) into its
+production path, which strips the dev-only warnings that themselves use eval.
+
+#### Symptoms
+
+| What you see | Likely cause |
+|---|---|
+| Card mounts, body is the right size, but no React | `crossorigin` attribute on script |
+| Card mounts, body is right size, console shows CSP violation re: `unsafe-eval` | Vite dev mode / `new Function` / HMR code |
+| Card empty, body is small (~4 KB) | Resource MIME wrong OR the bundle file isn't on the server |
+
+#### Where to look
+
+```pwsh
+# After build, check the produced HTML for these red flags:
+(Get-Content dist-widget/index.widget.html -Raw) -match 'crossorigin'        # should be False*
+(Get-Content dist-widget/index.widget.html -Raw) -match 'new Function'        # should be False
+(Get-Content dist-widget/index.widget.html -Raw) -match '__vite_hot_module'   # should be False
+```
+
+*The string `crossorigin` may appear inside JS literals (e.g. MSAL's CORS handling code).
+What matters is the `<script>` element itself. Check:
+
+```pwsh
+[regex]::Match((Get-Content dist-widget/index.widget.html -Raw), '<script[^>]*>').Value
+# Should be: <script type="module">  (no crossorigin attribute)
+```
+
 ## What our tool returns
 
 ```ts
@@ -220,9 +302,12 @@ message.
 | Empty card with just the agent name                    | Resource MIME was `text/html` or `text/html;profile=mcp-app`           | Use `text/html+skybridge` on descriptor AND content            |
 | Empty card, even with right MIME                       | Tool only set `_meta.ui.resourceUri`                                   | Also set `_meta["openai/outputTemplate"]` + `widgetAccessible` |
 | Empty card, MIME and template OK                       | Tool RESPONSE didn't include `openai/*` keys                           | Re-emit the same `_meta` on the call response                  |
+| **Card mounts, body is right size, but no React app**  | **`crossorigin` attribute on `<script>` tags (sandbox CORS check)**    | **Add `stripCrossorigin()` Vite plugin (see §6 above)**         |
+| **Card mounts, console shows `unsafe-eval` CSP error** | **Vite dev mode / HMR code emitted into bundle**                       | **Set `mode: 'production'` + `define NODE_ENV` in vite config** |
 | Widget loads but inner SWA iframe blocked              | No `frameDomains` in resource CSP                                      | Add SWA origin to `_meta.ui.csp.frameDomains`                  |
 | Widget loads, inner iframe loads, no auto-send         | Widget listened to wrong messages                                      | Listen for JSON-RPC `ui/notifications/tool-result` from parent |
 | Model prints `{"tool":"openCopilotStudioChat", ...}`   | DA instructions were too prescriptive ("ONLY action is to call X")     | Rewrite as natural language: describe the tool, don't command it |
+| Model answers from its own knowledge instead of calling tool | Tool description is too generic / DA instructions don't anchor it strongly enough | Make the tool description domain-specific; use "the only way to answer X is to call this tool" |
 | "Bad Request: Server not initialized" on second call   | Stateless server (sessionIdGenerator: undefined) breaks SDK init state | Use `sessionIdGenerator: () => randomUUID()` + transports map  |
 | "Something went wrong" mid-session, never recovers     | Session was evicted; client never re-initialized                       | Return 404 "Session not found" so client drops + re-inits      |
 

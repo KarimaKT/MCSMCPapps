@@ -72,7 +72,7 @@ single most important architectural decision and it falls out of one principle: 
 conversation id as the only id. CS allocates it, the SDK plumbs it, the widget displays
 activities tagged with it, escalation inherits it. We never mint a parallel id anywhere.
 
-## The three contract details that cost us days
+## The four contract details that cost us days
 
 If you build this, you will hit these. Here they are up front.
 
@@ -148,6 +148,46 @@ The MCP server imports that HTML at build time and returns it from `resources/re
 Microsoft's `trey-research` sample does the same. So does `fieldops`, `approvals-box`,
 `zava-insurance`. Every one of Microsoft's ~5 official samples bundles single-file. There's
 a reason.
+
+### 4. Strip `crossorigin` from inline scripts (this one we found by reading source)
+
+You did everything right: `text/html+skybridge` MIME, the `_meta` keys on three sites, single
+file bundle, CSP allowlists. You deploy. The card mounts at the right size — your 5 MB bundle
+is on the wire — but the React app never executes. Empty card, no console error, nothing.
+
+The reason: Vite (and most modern bundlers) emit:
+
+```html
+<script type="module" crossorigin>...</script>
+```
+
+The skybridge sandbox iframe has a **null origin**. The browser performs a CORS check on
+inline scripts marked `crossorigin`, sees null, and silently refuses to execute. The HTML
+loaded, the script body is in the document, the React app is right there — and nothing runs.
+
+Microsoft's reference repo solves it with a single Vite plugin
+([oai-apps-sdk/trey-research/.../widgets/build.mts](https://github.com/microsoft/mcp-interactiveUI-samples/blob/main/oai-apps-sdk/trey-research/node/src/mcpserver/widgets/build.mts)):
+
+```ts
+function stripCrossorigin(): Plugin {
+  return {
+    name: 'strip-crossorigin',
+    enforce: 'post',
+    transformIndexHtml(html) {
+      return html.replace(/<script([^>]*)\s+crossorigin(?:="[^"]*")?/g, '<script$1');
+    }
+  };
+}
+```
+
+There is **no documentation** of this requirement in the OpenAI Apps SDK docs, the M365 Copilot
+Learn pages, or the MCP Apps spec. The only way you find it is by cloning the reference repo
+and reading the build script. We added the same plugin to our config and the widget mounted
+on the next deploy.
+
+We also force `mode: 'production'` and `define: { 'process.env.NODE_ENV': '"production"' }` —
+without these, Vite leaks HMR / dev-only code that uses `eval` and `new Function()`, both of
+which the sandbox CSP blocks.
 
 ## What we used OOB — and what we wrote ourselves
 

@@ -166,6 +166,50 @@ If we don't productize this, the CS Kit team is the natural home — see
 
 ---
 
+## Critical: don't break the skybridge bundle
+
+If you change the Vite config (`vite.widget.config.ts`), keep these two settings — they are
+load-bearing for the widget to actually render in M365 Copilot:
+
+### `stripCrossorigin()` plugin
+
+Vite emits `<script type="module" crossorigin>...</script>` by default. The skybridge sandbox
+iframe has a **null origin**; the browser's CORS check on the inline script sees null,
+silently refuses to execute, and you get a blank card with no diagnostic.
+
+This repo includes a tiny post-transform Vite plugin that strips the attribute. **Do not
+remove it.** Verify after every build:
+
+```pwsh
+[regex]::Match((Get-Content webchat-ui/dist-widget/index.widget.html -Raw), '<script[^>]*>').Value
+# Expected: <script type="module">         (no crossorigin attribute)
+```
+
+Microsoft's reference samples include the same plugin
+([oai-apps-sdk/trey-research/.../widgets/build.mts](https://github.com/microsoft/mcp-interactiveUI-samples/blob/main/oai-apps-sdk/trey-research/node/src/mcpserver/widgets/build.mts)).
+
+### `mode: 'production'` + `define NODE_ENV`
+
+Without these, Vite leaks dev-only code that uses `eval()` and `new Function()`. The sandbox
+CSP blocks both. Symptoms: blank card OR a console error about `unsafe-eval`. **Do not
+remove these settings.**
+
+If you fork this and change frameworks (e.g. swap React for Solid), apply the same two rules
+to your new bundler:
+
+| Bundler | "Strip crossorigin" equivalent | "Production mode" equivalent |
+|---|---|---|
+| Vite + React | `stripCrossorigin()` plugin (this repo) | `mode: 'production'` + `define NODE_ENV` |
+| esbuild | post-process the output HTML | `--define:process.env.NODE_ENV='"production"'` |
+| webpack | `HtmlWebpackPlugin` config | `mode: 'production'` |
+| Rollup | `@rollup/plugin-html` config | `process.env.NODE_ENV` define |
+| Next.js (static export) | needs custom post-build step | `NODE_ENV=production npm run build` |
+
+The full list of skybridge contract requirements is in
+[MCP-APPS-CONTRACT.md](MCP-APPS-CONTRACT.md) §6.
+
+---
+
 ## Verifying your changes locally
 
 ```pwsh

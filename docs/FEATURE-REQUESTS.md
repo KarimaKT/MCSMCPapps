@@ -205,6 +205,95 @@ behind them, not just passive renderers.
 
 ---
 
+### 2.5 Document the **silent** sandbox failure modes for widget bundles
+
+**Pain.** A correctly-shaped widget bundle (right MIME, right `_meta`, right CSP) can
+**silently fail to execute** in the skybridge sandbox for two undocumented reasons. Each
+takes a day or more to diagnose because there is no error surfaced anywhere — just a blank
+card with a 5 MB body downloaded.
+
+**Failure mode A — `crossorigin` attribute on inline `<script>` tags.** Vite (and most
+modern bundlers) emit `<script type="module" crossorigin>...</script>` by default. The
+sandboxed iframe has a null origin; the browser performs a CORS check on the inline script,
+sees null, refuses to execute it. No console error. No diagnostic. The script body is in
+the document but never runs.
+
+**Failure mode B — dev-mode bundling artifacts.** If the bundler is not explicitly in
+production mode, it leaks HMR / dev-only code that uses `eval()` or `new Function()`. The
+sandbox CSP blocks both. With CSP violations browsers DO log to console, but the message
+("Refused to evaluate a string as JavaScript because 'unsafe-eval' is not an allowed source
+of script") is so generic that makers chase it as "my framework needs unsafe-eval" instead
+of "I forgot to set production mode."
+
+**Repro.**
+
+1. Create a Vite + React project.
+2. Run `vite build` (default config).
+3. Inline the output as a skybridge widget body.
+4. See: blank card. No error. No clue.
+
+**Ask.**
+
+- **Document both failure modes** prominently on the M365 Copilot widget Learn page with
+  the exact symptoms ("blank card despite a non-zero body size in `resources/read`").
+- Provide a small **`stripCrossorigin`** Vite plugin in the official samples (Microsoft's
+  `mcp-interactiveUI-samples` already has it; surface it on Learn).
+- Better yet: **make the sandbox tolerant** of `crossorigin` on inline scripts with a null
+  origin. This is a one-line change in the sandbox loader; it would unblock 100% of
+  default Vite/Next/Astro/Remix builds without any maker action.
+- Surface a **diagnostic event** when the sandbox refuses to execute the bundled script —
+  e.g. a `postMessage` from the host to the inert iframe with a meaningful error code.
+
+**Why it matters.** Every maker reaching for this pattern with default tooling will hit
+this. We did. The blast radius for "blank card with no diagnostic" is hundreds of
+maker-hours across the ecosystem.
+
+**Workaround.** Copy Microsoft's `stripCrossorigin` Vite plugin from
+[oai-apps-sdk/trey-research/.../widgets/build.mts](https://github.com/microsoft/mcp-interactiveUI-samples/blob/main/oai-apps-sdk/trey-research/node/src/mcpserver/widgets/build.mts).
+Set `mode: 'production'` and `define: { 'process.env.NODE_ENV': '"production"' }` in your
+Vite config. Documented in [docs/MCP-APPS-CONTRACT.md §6](MCP-APPS-CONTRACT.md).
+
+---
+
+### 2.6 Make M365 Copilot model routing more reliable for tool-only declarative agents
+
+**Pain.** When a DA's only purpose is to render a custom UI widget (the pattern this repo
+demonstrates), the host model in M365 Copilot **frequently answers from its own knowledge
+instead of calling the tool** — even when the DA instructions say "the only way to answer
+is to call this tool."
+
+We observed this on the same agent within seconds:
+
+- Prompt 1: *"what's the GDP of France?"* — model answers in markdown, no tool call.
+- Prompt 2: *"Show GDP growth trends for France"* — model invokes the tool with a confirm
+  card.
+
+Both prompts target identical CS agent capability. Routing is sensitive to prompt phrasing
+in non-obvious ways.
+
+**Ask.**
+
+- Add a tool-level metadata flag (e.g. `_meta["openai/forceInvoke"]: true` or
+  `_meta["m365copilot/exclusive"]: true`) that makes the host model **always** call the
+  tool when the DA is the active agent, regardless of the model's confidence in answering
+  directly.
+- Alternatively: at the DA level, a `behavior: "exclusive-tool"` field that says "this
+  agent has no native answers; always route to the tool."
+- Document the prompt-engineering levers that DO move routing today (tool description
+  specificity, DA instruction wording) so makers can deliberately tune routing without
+  trial and error.
+
+**Why it matters.** Custom-UI DAs are inherently "the agent IS the UI" — the model
+answering from its own knowledge defeats the entire pattern. It's also confusing to users:
+the same agent with the same prompt sometimes opens a custom UI and sometimes answers in
+plain markdown, with no way to predict which.
+
+**Workaround.** Make tool descriptions long, specific, and exhaustive (full list of
+capabilities). Make DA instructions naturally state "This agent's only knowledge is what
+the [tool name] tool returns." Even with both, routing is ~70-80% reliable, not 100%.
+
+---
+
 ## IMPORTANT — Conversation, state, observability
 
 ### 3.1 Expose the CS conversation id to the widget natively
@@ -310,12 +399,14 @@ the highest-leverage items:
 | Priority | Items | Why |
 |---|---|---|
 | 1. Unblock CD | 1.1, 1.2, 1.3 | No real customer can ship updates without these |
-| 2. Lower barrier | 2.1, 2.3 | Productize the pattern; 10x more customers can adopt |
-| 3. Resilience | 3.1, 3.3 | Prevents bad architectures; makes proactive scenarios work |
-| 4. Polish | 4.x | Quality of life |
+| 2. Lower barrier | 2.1, 2.3, **2.5** | Productize the pattern; 10x more customers can adopt |
+| 3. Make routing reliable | **2.6** | Custom-UI DAs only work if the model actually calls the tool |
+| 4. Resilience | 3.1, 3.3 | Prevents bad architectures; makes proactive scenarios work |
+| 5. Polish | 4.x | Quality of life |
 
 If only one thing gets fixed in the next release, **make it 1.1 + 1.2** — without those,
-custom CS+DA+widget agents are unshippable in production tenants.
+custom CS+DA+widget agents are unshippable in production tenants. **The next release after
+that should be 2.5** — silent sandbox failures cost every new maker a day.
 
 ---
 

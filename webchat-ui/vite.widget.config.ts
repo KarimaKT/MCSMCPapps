@@ -26,6 +26,9 @@
  * mounts and the user sees an empty card. WITH it: the React app boots
  * normally inside the sandbox.
  *
+ * Full writeup: [docs/MCP-APPS-CONTRACT.md] §6 and [docs/BLOG.md] "four
+ * contract details that cost us days".
+ *
  * # Why a separate config
  *
  * The standalone SWA output (`dist/`) is built by `vite.config.ts`. Two
