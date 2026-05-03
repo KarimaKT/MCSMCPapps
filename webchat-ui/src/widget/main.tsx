@@ -30,7 +30,7 @@ import {
   type AccountInfo
 } from '@azure/msal-browser';
 import { Widget } from './Widget';
-import { subscribePpToken } from './host-bridge';
+import { subscribePpToken, subscribeToolDiag } from './host-bridge';
 
 /**
  * Boot trace bridge.
@@ -102,6 +102,16 @@ function App() {
       trace('host-token-received', { length: t.length });
       setHostTokenReceived(true);
       setToken(t);
+    });
+    return () => unsub();
+  }, []);
+
+  // Server-side OBO diagnostics — always emitted by the tool whether or
+  // not OBO succeeded. This is what tells us why ppToken is or isn't
+  // present.
+  useEffect(() => {
+    const unsub = subscribeToolDiag((diag) => {
+      trace('tool-meta-diag', diag);
     });
     return () => unsub();
   }, []);

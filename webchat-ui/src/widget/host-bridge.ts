@@ -65,6 +65,24 @@ function readPpToken(payload: unknown): string | null {
 }
 
 /**
+ * Look for the server-side diagnostic block at
+ * `_meta.mcsmcpapps.diag`. Always present when the tool was invoked
+ * regardless of OBO success — used to debug end-to-end auth without
+ * needing App Service stdout.
+ */
+function readToolDiag(payload: unknown): Record<string, unknown> | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const obj = payload as Record<string, unknown>;
+  const meta = obj._meta as Record<string, unknown> | undefined;
+  const ns = meta?.mcsmcpapps as Record<string, unknown> | undefined;
+  const diag = ns?.diag;
+  if (diag && typeof diag === 'object') {
+    return diag as Record<string, unknown>;
+  }
+  return null;
+}
+
+/**
  * Subscribe to the host bridge. Calls `onFirstQuery(text)` exactly once
  * with the user's verbatim message that triggered the tool call (if any).
  * Returns a cleanup function.
@@ -184,6 +202,70 @@ export function subscribePpToken(onToken: PpTokenListener): () => void {
       msg.method === 'ui/notifications/tool-result'
     ) {
       fire(readPpToken(msg.params));
+    }
+  };
+  window.addEventListener('message', onMessage);
+
+  return () => {
+    window.removeEventListener(
+      'openai:set_globals',
+      onSetGlobals as EventListener
+    );
+    window.removeEventListener('message', onMessage);
+  };
+}
+
+export type ToolDiagListener = (diag: Record<string, unknown>) => void;
+
+/**
+ * Subscribe to the host bridge for the server-side `diag` block. Calls
+ * `onDiag(diag)` exactly once with the contents of
+ * `_meta.mcsmcpapps.diag` from the tool response. Used to debug end-
+ * to-end auth without needing App Service stdout.
+ */
+export function subscribeToolDiag(onDiag: ToolDiagListener): () => void {
+  let fired = false;
+  const fire = (diag: Record<string, unknown> | null) => {
+    if (fired || !diag) return;
+    fired = true;
+    onDiag(diag);
+  };
+
+  try {
+    const w = window.openai;
+    if (w) {
+      fire(readToolDiag(w.toolInput) ?? readToolDiag(w.toolOutput));
+    }
+  } catch {
+    // ignore
+  }
+
+  const onSetGlobals = (event: Event) => {
+    try {
+      const detail = (event as CustomEvent<{ globals: OpenAiBridge }>).detail;
+      const g = detail?.globals ?? {};
+      fire(readToolDiag(g.toolInput) ?? readToolDiag(g.toolOutput));
+    } catch {
+      // ignore
+    }
+  };
+  window.addEventListener('openai:set_globals', onSetGlobals as EventListener, {
+    passive: true
+  } as AddEventListenerOptions);
+
+  const onMessage = (e: MessageEvent) => {
+    if (e.source !== window.parent) return;
+    const msg = e.data as {
+      jsonrpc?: string;
+      method?: string;
+      params?: unknown;
+    };
+    if (!msg || msg.jsonrpc !== '2.0') return;
+    if (
+      msg.method === 'ui/notifications/tool-input' ||
+      msg.method === 'ui/notifications/tool-result'
+    ) {
+      fire(readToolDiag(msg.params));
     }
   };
   window.addEventListener('message', onMessage);

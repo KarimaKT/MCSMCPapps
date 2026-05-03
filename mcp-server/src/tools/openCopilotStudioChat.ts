@@ -101,21 +101,52 @@ export function registerOpenCopilotStudioChatTool(
       // silent SSO inside the skybridge sandbox (which fails because
       // the iframe has a null origin and can't open the MSAL monitor
       // window). When SSO is disabled the widget falls back to MSAL.
+      //
+      // We also capture the outcome of every step in a `diag` block on
+      // the response `_meta`. The widget logs it to the iframe console
+      // (look for `[mcsmcpapps] tool-meta-diag`) so we can debug end-
+      // to-end without needing App Service stdout access.
       const entra = loadEntraConfig();
       const ctx = getAuthContext();
       // eslint-disable-next-line no-console
       console.log(
         `[tool] openCopilotStudioChat invoked: ssoEnabled=${Boolean(entra)} hasCtx=${Boolean(ctx)} userQueryLen=${userQuery.length}`
       );
-      const powerPlatformToken = entra && ctx
-        ? await exchangeForPowerPlatformToken(entra)
-        : null;
+
+      const diag: Record<string, unknown> = {
+        ssoEnabled: Boolean(entra),
+        hasCtx: Boolean(ctx),
+        hasClientSecret: Boolean(entra?.clientSecret),
+        ppScope: entra?.ppScope ?? null,
+        userQueryLen: userQuery.length
+      };
+
+      let powerPlatformToken: string | null = null;
+      if (entra && ctx) {
+        diag.oboAttempted = true;
+        try {
+          powerPlatformToken = await exchangeForPowerPlatformToken(entra);
+          diag.oboOk = Boolean(powerPlatformToken);
+          diag.ppTokenLen = powerPlatformToken?.length ?? 0;
+        } catch (err) {
+          diag.oboOk = false;
+          diag.oboError = String(
+            (err as Error)?.message || err
+          ).slice(0, 300);
+        }
+      } else {
+        diag.oboAttempted = false;
+        diag.oboSkipReason = !entra
+          ? 'sso-disabled'
+          : 'no-auth-context';
+      }
 
       const callMeta: Record<string, unknown> = {
         ...meta,
         // Project-specific namespace for any extra widget state.
         mcsmcpapps: {
           userQuery,
+          diag,
           // Only attach a token when OBO actually succeeded. The widget
           // detects its presence; absence triggers MSAL fallback.
           ...(powerPlatformToken ? { ppToken: powerPlatformToken } : {}),
