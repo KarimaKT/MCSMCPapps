@@ -43,6 +43,7 @@
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import cors, { type CorsOptions } from 'cors';
 import express, { type Request, type Response } from 'express';
+import { entraAuthMiddleware, loadEntraConfig } from './auth.js';
 import { loadConfig } from './config.js';
 import { buildServer, SERVER_NAME, SERVER_VERSION } from './server.js';
 
@@ -51,6 +52,7 @@ import { buildServer, SERVER_NAME, SERVER_VERSION } from './server.js';
 // ---------------------------------------------------------------------------
 
 const config = loadConfig();
+const entra = loadEntraConfig();
 const app = express();
 
 const corsOptions: CorsOptions = {
@@ -80,6 +82,10 @@ const corsOptions: CorsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
+
+// Entra SSO auth — no-op when env vars (`ENTRA_AUDIENCE`,
+// `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`) are unset. See `auth.ts`.
+const entraAuth = entraAuthMiddleware(entra);
 
 // ---------------------------------------------------------------------------
 // Health endpoint (no MCP)
@@ -122,7 +128,7 @@ async function dispatch(req: Request, res: Response): Promise<void> {
   await transport.handleRequest(req, res, req.body);
 }
 
-app.post('/mcp', async (req: Request, res: Response) => {
+app.post('/mcp', entraAuth, async (req: Request, res: Response) => {
   try {
     await dispatch(req, res);
   } catch (err) {
@@ -141,7 +147,7 @@ app.post('/mcp', async (req: Request, res: Response) => {
 // GET /mcp — clients may probe or open a server→client SSE stream. In
 // stateless mode we let the transport answer with the protocol-correct
 // response (typically 405 Method Not Allowed for our setup).
-app.get('/mcp', async (req: Request, res: Response) => {
+app.get('/mcp', entraAuth, async (req: Request, res: Response) => {
   try {
     await dispatch(req, res);
   } catch (err) {
@@ -159,7 +165,7 @@ app.get('/mcp', async (req: Request, res: Response) => {
 
 // DELETE /mcp — stateless: no per-server state to delete; let the
 // transport answer.
-app.delete('/mcp', async (req: Request, res: Response) => {
+app.delete('/mcp', entraAuth, async (req: Request, res: Response) => {
   try {
     await dispatch(req, res);
   } catch (err) {
@@ -186,7 +192,8 @@ app.listen(config.port, () => {
       `[${SERVER_NAME}] v${SERVER_VERSION} listening on :${config.port}`,
       `  agentName: ${config.agentName}`,
       `  swaOrigin: ${config.swaOrigin}`,
-      `  POST /mcp  (stateless Streamable HTTP)`
+      `  POST /mcp  (stateless Streamable HTTP)`,
+      `  Entra SSO: ${entra ? 'ENABLED (audience=' + entra.audience + ')' : 'disabled (anonymous)'}`
     ].join('\n')
   );
 });

@@ -30,6 +30,7 @@ import {
   type AccountInfo
 } from '@azure/msal-browser';
 import { Widget } from './Widget';
+import { subscribePpToken } from './host-bridge';
 
 /**
  * Boot trace bridge.
@@ -80,8 +81,33 @@ function App() {
   const [token, setToken] = useState<string>('');
   const [error, setError] = useState<string>('');
   const [pca, setPca] = useState<PublicClientApplication | null>(null);
+  const [hostTokenReceived, setHostTokenReceived] = useState(false);
+
+  // Prefer a token supplied by the M365 Copilot host through the tool
+  // response `_meta.mcsmcpapps.ppToken`. Mode of operation:
+  //
+  //   - **Entra SSO enabled on the MCP server** (production path): the
+  //     server OBO-exchanges the user's inbound Entra token for a
+  //     Power Platform API token and embeds it in `_meta`. We pick it
+  //     up here, set `hostTokenReceived`, skip MSAL entirely. Zero
+  //     user prompts inside the skybridge sandbox.
+  //
+  //   - **Anonymous MCP** (legacy / dev path): the field is absent.
+  //     We fall through to MSAL silent SSO. Inside skybridge MSAL
+  //     usually fails with `monitor_window_timeout` because the iframe
+  //     has a null origin and can't reach `login.microsoftonline.com`
+  //     from the sandbox. The standalone SWA path still works.
+  useEffect(() => {
+    const unsub = subscribePpToken((t) => {
+      trace('host-token-received', { length: t.length });
+      setHostTokenReceived(true);
+      setToken(t);
+    });
+    return () => unsub();
+  }, []);
 
   useEffect(() => {
+    if (hostTokenReceived) return; // host gave us a token — skip MSAL
     trace('app-mounted', {
       hasClientId: Boolean(env.clientId),
       hasTenantId: Boolean(env.tenantId),
@@ -114,9 +140,10 @@ function App() {
         });
         setError(`MSAL init failed: ${err instanceof Error ? err.message : String(err)}`);
       });
-  }, [env.clientId, env.tenantId]);
+  }, [env.clientId, env.tenantId, hostTokenReceived]);
 
   useEffect(() => {
+    if (hostTokenReceived) return; // host gave us a token — skip MSAL
     if (!pca) return;
     let cancelled = false;
     void (async () => {

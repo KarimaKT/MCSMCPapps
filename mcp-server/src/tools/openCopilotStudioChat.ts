@@ -34,6 +34,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { exchangeForPowerPlatformToken, getAuthContext, loadEntraConfig } from '../auth.js';
 import type { ServerConfig } from '../config.js';
 import { UI_RESOURCE_URI } from '../resources/chatWidget.js';
 
@@ -93,6 +94,41 @@ export function registerOpenCopilotStudioChatTool(
     async (args) => {
       const userQuery =
         typeof args?.userQuery === 'string' ? args.userQuery : '';
+
+      // When Entra SSO is enabled, OBO-exchange the inbound user token
+      // for a Power Platform API token and surface it in `_meta` so the
+      // widget can call CS Direct Engine without doing its own MSAL
+      // silent SSO inside the skybridge sandbox (which fails because
+      // the iframe has a null origin and can't open the MSAL monitor
+      // window). When SSO is disabled the widget falls back to MSAL.
+      const entra = loadEntraConfig();
+      const ctx = getAuthContext();
+      const powerPlatformToken = entra && ctx
+        ? await exchangeForPowerPlatformToken(entra)
+        : null;
+
+      const callMeta: Record<string, unknown> = {
+        ...meta,
+        // Project-specific namespace for any extra widget state.
+        mcsmcpapps: {
+          userQuery,
+          // Only attach a token when OBO actually succeeded. The widget
+          // detects its presence; absence triggers MSAL fallback.
+          ...(powerPlatformToken ? { ppToken: powerPlatformToken } : {}),
+          // Surface the user's display name for the widget header.
+          // `claims.name` is standard, `preferred_username` is the
+          // documented fallback. Both come from the verified inbound
+          // token, never user-supplied.
+          ...(ctx?.claims?.name && typeof ctx.claims.name === 'string'
+            ? { userName: ctx.claims.name }
+            : {}),
+          ...(ctx?.claims?.preferred_username &&
+          typeof ctx.claims.preferred_username === 'string'
+            ? { userPrincipalName: ctx.claims.preferred_username }
+            : {})
+        }
+      };
+
       return {
         content: [
           {
@@ -107,12 +143,9 @@ export function registerOpenCopilotStudioChatTool(
         structuredContent: { userQuery },
         // _meta on the response tells the host which template to mount
         // for THIS specific call (Microsoft's reference re-emits the same
-        // openai/* keys that appear on the descriptor).
-        _meta: {
-          ...meta,
-          // Project-specific namespace for any extra widget state.
-          mcsmcpapps: { userQuery }
-        }
+        // openai/* keys that appear on the descriptor) plus the OBO'd
+        // user token when Entra SSO is on.
+        _meta: callMeta
       };
     }
   );

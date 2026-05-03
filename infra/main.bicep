@@ -34,6 +34,28 @@ param mcpAgentDescription string = 'Open the embedded Copilot Studio chat surfac
 @description('Origin of the Static Web App, used by the MCP widget. Set after the SWA is deployed.')
 param swaOrigin string = ''
 
+// Entra SSO parameters. All four must be set together to enable
+// Microsoft Entra ID SSO authentication on the MCP server (zero-prompt
+// user auth via the M365 Copilot host). Leave them blank to keep the
+// server in legacy / anonymous mode and let the widget perform its own
+// MSAL silent SSO. See docs/AUTH-ARCHITECTURE.md.
+
+@description('Tenant where end users sign in (CDX). Empty to disable Entra SSO.')
+param entraTenantId string = ''
+
+@description('Application ID URI of our API; matches the aud claim on inbound tokens. e.g. api://app-mcsmcpapps-mcp/access_as_user')
+param entraAudience string = ''
+
+@description('Entra app reg client id (used for OBO exchange).')
+param entraClientId string = ''
+
+@description('Entra app reg client SECRET (used for OBO exchange). Leave blank to skip OBO and forward inbound token unchanged. Production: replace with Key Vault reference or federated credential.')
+@secure()
+param entraClientSecret string = ''
+
+@description('Power Platform API scope requested via OBO. Default is the standard CS Direct Engine scope.')
+param entraPpScope string = 'https://api.powerplatform.com/CopilotStudio.Copilots.Invoke'
+
 @description('Tags applied to all resources.')
 param tags object = {
   project: 'MCSMCPapps'
@@ -118,6 +140,28 @@ resource mcpApp 'Microsoft.Web/sites@2024-04-01' = {
         {
           name: 'AGENT_DESCRIPTION'
           value: mcpAgentDescription
+        }
+        // Entra SSO config — all four must be set together. When empty
+        // the MCP server stays in anonymous mode (legacy behavior).
+        {
+          name: 'ENTRA_TENANT_ID'
+          value: entraTenantId
+        }
+        {
+          name: 'ENTRA_AUDIENCE'
+          value: entraAudience
+        }
+        {
+          name: 'ENTRA_CLIENT_ID'
+          value: entraClientId
+        }
+        {
+          name: 'ENTRA_CLIENT_SECRET'
+          value: entraClientSecret
+        }
+        {
+          name: 'ENTRA_PP_SCOPE'
+          value: entraPpScope
         }
         // App Service injects PORT itself; we read it in config.ts.
       ]
