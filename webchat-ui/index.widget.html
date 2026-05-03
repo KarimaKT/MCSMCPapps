@@ -18,10 +18,81 @@
       .webchat__basic-transcript {
         min-width: 0;
       }
+      /* Diagnostic boot marker. Visible only if React never replaces #root. */
+      #boot-marker {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        right: 8px;
+        padding: 12px 14px;
+        font: 12px/1.4 ui-monospace, Consolas, monospace;
+        color: #5b5d62;
+        background: #fff8e1;
+        border: 1px solid #f4c430;
+        border-radius: 6px;
+        white-space: pre-wrap;
+        z-index: 1;
+      }
     </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="boot-marker">widget html parsed (no script run yet)</div>
+    </div>
+    <!--
+      Inline diagnostic shim. Runs BEFORE the module bundle, with no
+      imports and no JSX, so even if the module bundle fails to load /
+      execute we still see this marker fire. Mirrors what Microsoft's
+      mcp-interactiveUI-samples does for boot diagnostics.
+    -->
+    <script>
+      (function () {
+        var marker = document.getElementById('boot-marker');
+        function paint(line) {
+          if (!marker) return;
+          marker.textContent =
+            (marker.textContent || '') + '\n' + new Date().toISOString().substr(11, 12) + ' ' + line;
+        }
+        function trace(phase, extra) {
+          var payload = { source: 'mcsmcpapps-widget', phase: phase, extra: extra || null };
+          try { console.log('[mcsmcpapps]', payload); } catch (_) {}
+          try { window.parent && window.parent.postMessage(payload, '*'); } catch (_) {}
+          paint(phase + (extra ? ' :: ' + JSON.stringify(extra) : ''));
+        }
+        window.__mcsmcpappsTrace = trace;
+        trace('inline-shim-ran');
+        try {
+          trace('host-globals', {
+            hasOpenai: typeof window.openai === 'object' && window.openai !== null,
+            hasParent: window.parent !== window,
+            origin: location.origin,
+            href: location.href.substr(0, 120)
+          });
+        } catch (e) {
+          trace('host-globals-failed', { msg: String(e && e.message || e) });
+        }
+        window.addEventListener('error', function (ev) {
+          trace('window.onerror', {
+            msg: String(ev.message || ''),
+            src: String((ev.filename || '') + '').substr(0, 120),
+            line: ev.lineno || 0
+          });
+        });
+        window.addEventListener('unhandledrejection', function (ev) {
+          var r = ev && ev.reason;
+          trace('unhandledrejection', {
+            msg: String((r && (r.message || r)) || '').substr(0, 200)
+          });
+        });
+        // After 2s, if React hasn't claimed #root, the marker stays put
+        // and the user / dev sees what happened in the marker box itself.
+        setTimeout(function () {
+          if (document.getElementById('boot-marker')) {
+            trace('still-no-react-after-2s');
+          }
+        }, 2000);
+      })();
+    </script>
     <script type="module" src="/src/widget/main.tsx"></script>
   </body>
 </html>

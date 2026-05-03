@@ -31,6 +31,29 @@ import {
 } from '@azure/msal-browser';
 import { Widget } from './Widget';
 
+/**
+ * Boot trace bridge.
+ *
+ * The inline `<script>` in `index.widget.html` defines `window.__mcsmcpappsTrace`
+ * which appends to the on-screen boot-marker AND postMessages to the host
+ * parent. We import it here so the React phase contributes to the same
+ * trace stream — invaluable when the iframe console is not visible in
+ * M365 Copilot devtools.
+ */
+declare global {
+  interface Window {
+    __mcsmcpappsTrace?: (phase: string, extra?: unknown) => void;
+  }
+}
+function trace(phase: string, extra?: unknown): void {
+  try {
+    window.__mcsmcpappsTrace?.(phase, extra);
+  } catch {
+    // ignore
+  }
+}
+trace('module-bundle-evaluating');
+
 interface AppEnv {
   environmentId: string;
   schemaName: string;
@@ -59,7 +82,14 @@ function App() {
   const [pca, setPca] = useState<PublicClientApplication | null>(null);
 
   useEffect(() => {
+    trace('app-mounted', {
+      hasClientId: Boolean(env.clientId),
+      hasTenantId: Boolean(env.tenantId),
+      hasEnvId: Boolean(env.environmentId),
+      hasSchema: Boolean(env.schemaName)
+    });
     if (!env.clientId || !env.tenantId) {
+      trace('missing-aad-config');
       setError('Widget is missing AAD client id or tenant id.');
       return;
     }
@@ -72,9 +102,18 @@ function App() {
       },
       cache: { cacheLocation: 'sessionStorage' }
     });
-    instance.initialize().then(() => {
-      setPca(instance);
-    });
+    instance
+      .initialize()
+      .then(() => {
+        trace('msal-initialized');
+        setPca(instance);
+      })
+      .catch((err) => {
+        trace('msal-init-failed', {
+          msg: String((err && (err.message || err)) || '')
+        });
+        setError(`MSAL init failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
   }, [env.clientId, env.tenantId]);
 
   useEffect(() => {
@@ -84,25 +123,37 @@ function App() {
       try {
         const accounts = pca.getAllAccounts();
         const account: AccountInfo | undefined = accounts[0];
+        trace('token-acquire-start', {
+          path: account ? 'silent' : 'ssoSilent',
+          accounts: accounts.length
+        });
         const result = account
           ? await pca.acquireTokenSilent({ scopes: [env.scope], account })
           : await pca.ssoSilent({ scopes: [env.scope] });
+        trace('token-acquired', { length: result.accessToken.length });
         if (!cancelled) setToken(result.accessToken);
       } catch (err) {
         if (cancelled) return;
+        const errMsg =
+          err instanceof Error ? err.message : String(err);
+        trace('token-acquire-failed', {
+          kind: err instanceof InteractionRequiredAuthError ? 'interactionRequired' : 'other',
+          msg: errMsg.substr(0, 200)
+        });
         if (err instanceof InteractionRequiredAuthError) {
           // Try popup. May fail inside skybridge sandbox.
           try {
             const result = await pca.acquireTokenPopup({ scopes: [env.scope] });
+            trace('token-acquired-popup', { length: result.accessToken.length });
             if (!cancelled) setToken(result.accessToken);
           } catch (popupErr) {
             const msg =
               popupErr instanceof Error ? popupErr.message : String(popupErr);
+            trace('token-popup-failed', { msg: msg.substr(0, 200) });
             if (!cancelled) setError(`Sign-in failed: ${msg}`);
           }
         } else {
-          const msg = err instanceof Error ? err.message : String(err);
-          if (!cancelled) setError(`Sign-in failed: ${msg}`);
+          if (!cancelled) setError(`Sign-in failed: ${errMsg}`);
         }
       }
     })();
@@ -137,9 +188,26 @@ function App() {
 
 const container = document.getElementById('root');
 if (container) {
+  // React owns #root from this point. Strip the inline boot-marker so it
+  // doesn't visually overlay the chat. The trace stream still fires.
+  const marker = document.getElementById('boot-marker');
+  if (marker && marker.parentNode === container) {
+    container.removeChild(marker);
+  }
+  trace('react-render-start');
   // React 16 API. Microsoft's webchat-react sample also pins 16 because
   // `botframework-webchat` ships under that version. Upgrading to 18 is
   // a larger surgery (Composer + hooks API differences) and out of v0.5
   // scope.
-  ReactDOM.render(<App />, container);
+  try {
+    ReactDOM.render(<App />, container);
+    trace('react-render-returned');
+  } catch (err) {
+    trace('react-render-threw', {
+      msg: String((err as Error)?.message || err).substr(0, 300)
+    });
+    throw err;
+  }
+} else {
+  trace('no-root-element');
 }

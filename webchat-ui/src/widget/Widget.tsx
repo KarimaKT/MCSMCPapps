@@ -47,6 +47,16 @@ import styleOptionsJson from './style-options.json';
 
 const { BasicWebChat, Composer } = Components;
 
+/** Boot trace bridge (set by inline shim in index.widget.html). */
+function trace(phase: string, extra?: unknown): void {
+  try {
+    (window as unknown as { __mcsmcpappsTrace?: (p: string, e?: unknown) => void })
+      .__mcsmcpappsTrace?.(phase, extra);
+  } catch {
+    // ignore
+  }
+}
+
 // Brand env vars override styleOptions where they overlap. This gives a
 // maker the choice: full JSON theme (CS Kit export), or just tweak 1-2
 // env vars for a quick rebrand. Both work.
@@ -94,13 +104,23 @@ export function Widget(props: WidgetProps): JSX.Element | null {
   // Build the CS connection once we have a token.
   useEffect(() => {
     if (!props.accessToken) return;
-    setConnection(
-      buildCsConnection({
+    trace('cs-connection-build', {
+      hasEnvId: Boolean(props.environmentId),
+      hasSchema: Boolean(props.schemaName)
+    });
+    try {
+      const c = buildCsConnection({
         environmentId: props.environmentId,
         schemaName: props.schemaName,
         accessToken: props.accessToken
-      })
-    );
+      });
+      trace('cs-connection-ready');
+      setConnection(c);
+    } catch (err) {
+      trace('cs-connection-failed', {
+        msg: String((err as Error)?.message || err).substr(0, 200)
+      });
+    }
   }, [props.accessToken, props.environmentId, props.schemaName]);
 
   // Listen for the host's first-message handoff (e.g. M365 Copilot tool
