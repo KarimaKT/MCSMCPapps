@@ -48,18 +48,32 @@ function readUserQuery(payload: unknown): string | null {
 }
 
 /**
- * Look for a Power Platform API token under `_meta.mcsmcpapps.ppToken`.
- * The MCP server places it there only when Entra SSO is enabled and the
- * OBO exchange succeeds; otherwise the field is absent and the widget
- * falls back to its own MSAL silent SSO.
+ * Look for a Power Platform API token.
+ *
+ * The MCP server places it in two redundant locations on the tool
+ * response:
+ *   - `_meta.mcsmcpapps.ppToken` — primary
+ *   - `structuredContent.mcsmcpapps.ppToken` — fallback, used when the
+ *     host strips unknown `_meta` keys before forwarding to the widget
+ *
+ * Returns the first match or null if absent. Absence triggers the
+ * widget's MSAL fallback (which fails inside skybridge but works on
+ * the standalone SWA channel).
  */
 function readPpToken(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object') return null;
   const obj = payload as Record<string, unknown>;
+  // Primary: `_meta.mcsmcpapps.ppToken`
   const meta = obj._meta as Record<string, unknown> | undefined;
-  const ns = meta?.mcsmcpapps as Record<string, unknown> | undefined;
-  if (ns && typeof ns.ppToken === 'string' && ns.ppToken) {
-    return ns.ppToken;
+  const metaNs = meta?.mcsmcpapps as Record<string, unknown> | undefined;
+  if (metaNs && typeof metaNs.ppToken === 'string' && metaNs.ppToken) {
+    return metaNs.ppToken;
+  }
+  // Fallback: `structuredContent.mcsmcpapps.ppToken`
+  const sc = obj.structuredContent as Record<string, unknown> | undefined;
+  const scNs = sc?.mcsmcpapps as Record<string, unknown> | undefined;
+  if (scNs && typeof scNs.ppToken === 'string' && scNs.ppToken) {
+    return scNs.ppToken;
   }
   return null;
 }
@@ -67,11 +81,11 @@ function readPpToken(payload: unknown): string | null {
 /**
  * Look for the server-side diagnostic block.
  *
- * The MCP server places it in two redundant locations on the tool
+ * The MCP server places it in three redundant locations on the tool
  * response:
- *   - `_meta.mcsmcpapps.diag` — primary
- *   - `structuredContent.diag` — fallback, in case the host strips
- *     unrecognized `_meta` keys before forwarding to the widget
+ *   - `_meta.mcsmcpapps.diag` — primary, may be stripped by the host
+ *   - `structuredContent.mcsmcpapps.diag` — survives the host
+ *   - `structuredContent.diag` — top-level fallback for older code paths
  *
  * Always present when the tool was invoked regardless of OBO success —
  * used to debug end-to-end auth without needing App Service stdout.
@@ -81,13 +95,19 @@ function readToolDiag(payload: unknown): Record<string, unknown> | null {
   const obj = payload as Record<string, unknown>;
   // Primary: `_meta.mcsmcpapps.diag`
   const meta = obj._meta as Record<string, unknown> | undefined;
-  const ns = meta?.mcsmcpapps as Record<string, unknown> | undefined;
-  const fromMeta = ns?.diag;
+  const metaNs = meta?.mcsmcpapps as Record<string, unknown> | undefined;
+  const fromMeta = metaNs?.diag;
   if (fromMeta && typeof fromMeta === 'object') {
     return fromMeta as Record<string, unknown>;
   }
-  // Fallback: `structuredContent.diag`
+  // Fallback A: `structuredContent.mcsmcpapps.diag`
   const sc = obj.structuredContent as Record<string, unknown> | undefined;
+  const scNs = sc?.mcsmcpapps as Record<string, unknown> | undefined;
+  const fromScNs = scNs?.diag;
+  if (fromScNs && typeof fromScNs === 'object') {
+    return fromScNs as Record<string, unknown>;
+  }
+  // Fallback B: `structuredContent.diag`
   const fromSc = sc?.diag;
   if (fromSc && typeof fromSc === 'object') {
     return fromSc as Record<string, unknown>;

@@ -164,6 +164,29 @@ export function registerOpenCopilotStudioChatTool(
         }
       };
 
+      // Build the structured content channel. M365 Copilot's host
+      // strips many keys from `_meta` before forwarding to the widget,
+      // but `structuredContent` is documented to flow through verbatim.
+      // So we mirror everything the widget needs here under a
+      // namespace-safe `mcsmcpapps` key (in addition to the top-level
+      // `userQuery` field that the host also reads).
+      const structuredContent: Record<string, unknown> = {
+        userQuery,
+        diag,
+        mcsmcpapps: {
+          userQuery,
+          diag,
+          ...(powerPlatformToken ? { ppToken: powerPlatformToken } : {}),
+          ...(ctx?.claims?.name && typeof ctx.claims.name === 'string'
+            ? { userName: ctx.claims.name }
+            : {}),
+          ...(ctx?.claims?.preferred_username &&
+          typeof ctx.claims.preferred_username === 'string'
+            ? { userPrincipalName: ctx.claims.preferred_username }
+            : {})
+        }
+      };
+
       return {
         content: [
           {
@@ -173,16 +196,16 @@ export function registerOpenCopilotStudioChatTool(
               `\"${userQuery.slice(0, 200)}\"`
           }
         ],
-        // structuredContent surfaces userQuery to the widget via
-        // `window.openai.toolOutput` and JSON-RPC `ui/notifications/tool-result`.
-        // We also include the diag block redundantly here in case the
-        // host strips unrecognized keys from `_meta` before forwarding
-        // to the widget.
-        structuredContent: { userQuery, diag },
-        // _meta on the response tells the host which template to mount
-        // for THIS specific call (Microsoft's reference re-emits the same
-        // openai/* keys that appear on the descriptor) plus the OBO'd
-        // user token when Entra SSO is on.
+        // `structuredContent` is the reliable channel to the widget —
+        // host forwards it as `window.openai.toolOutput` verbatim.
+        // Holds: userQuery, diag, and the `mcsmcpapps` namespace with
+        // ppToken / userName / userPrincipalName when Entra SSO is on.
+        structuredContent,
+        // `_meta` carries the host-level keys (`openai/outputTemplate`,
+        // `widgetAccessible`, etc.) which the host consumes itself and
+        // does NOT forward to the widget. Tool-specific fields here
+        // (e.g. `mcsmcpapps.ppToken`) are stripped — that's why we
+        // also put them on `structuredContent.mcsmcpapps`.
         _meta: callMeta
       };
     }
