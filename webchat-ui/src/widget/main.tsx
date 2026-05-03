@@ -82,6 +82,9 @@ function App() {
   const [error, setError] = useState<string>('');
   const [pca, setPca] = useState<PublicClientApplication | null>(null);
   const [hostTokenReceived, setHostTokenReceived] = useState(false);
+  // Latest server-side OBO diagnostic block, surfaced in the error UI
+  // so you can read it without opening devtools.
+  const [toolDiag, setToolDiag] = useState<Record<string, unknown> | null>(null);
 
   // Prefer a token supplied by the M365 Copilot host through the tool
   // response `_meta.mcsmcpapps.ppToken`. Mode of operation:
@@ -112,6 +115,7 @@ function App() {
   useEffect(() => {
     const unsub = subscribeToolDiag((diag) => {
       trace('tool-meta-diag', diag);
+      setToolDiag(diag);
     });
     return () => unsub();
   }, []);
@@ -201,9 +205,33 @@ function App() {
 
   if (error) {
     return (
-      <div style={{ padding: 16, color: '#8b0000', fontFamily: 'Segoe UI' }}>
+      <div style={{ padding: 16, color: '#8b0000', fontFamily: 'Segoe UI', fontSize: 13, lineHeight: 1.4 }}>
         <strong>Cannot start chat.</strong>
         <div style={{ marginTop: 8 }}>{error}</div>
+        {toolDiag ? (
+          <details style={{ marginTop: 12, color: '#5b5d62' }} open>
+            <summary style={{ cursor: 'pointer', userSelect: 'none' }}>
+              Server diagnostic (auth path)
+            </summary>
+            <pre style={{
+              marginTop: 6,
+              padding: 8,
+              background: '#fff8e1',
+              border: '1px solid #f4c430',
+              borderRadius: 4,
+              fontFamily: 'ui-monospace, Consolas, monospace',
+              fontSize: 11,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              maxHeight: 240,
+              overflow: 'auto'
+            }}>{JSON.stringify(toolDiag, null, 2)}</pre>
+          </details>
+        ) : (
+          <div style={{ marginTop: 12, color: '#5b5d62', fontSize: 11 }}>
+            (no server diagnostic received — tool may not have been called)
+          </div>
+        )}
       </div>
     );
   }
