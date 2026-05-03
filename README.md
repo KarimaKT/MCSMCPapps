@@ -1,122 +1,237 @@
-# MCSMCPapps — Embed a Copilot Studio agent in Microsoft 365 Copilot
+# MCSMCPapps
 
-> **Status:** 🚧 First-try / experimental pattern. Phase 1 (scaffold) complete. See [docs/PROGRESS.md](docs/PROGRESS.md) for current state.
+> **Embed a Copilot Studio agent inside Microsoft 365 Copilot — with your own UI.**
 
-A reference implementation that embeds a **Microsoft Copilot Studio (MCS) agent** inside **Microsoft 365 Copilot** using a 3-piece launcher pattern — giving the agent a long-running, custom WebChat surface inside the M365 Copilot pane.
+A reference implementation, MIT-licensed, fork-ready. Custom-branded React widget rendered
+inside M365 Copilot, talking to your CS agent, with out-of-the-box live-agent escalation
+via D365 Omnichannel.
 
-```text
-User ▶ M365 Copilot ▶ Declarative Agent (launcher) ▶ MCP App (HTML host) ▶ WebChat UI ▶ Copilot Studio Agent
+[![Status](https://img.shields.io/badge/status-v0.5_demo--ready-blue)](docs/PROGRESS.md)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Fork-time](https://img.shields.io/badge/fork--to--running-30%20min-orange)](#quickstart)
+
+```
+M365 Copilot ── DA + MCP ──▶ skybridge widget (React, single file)
+                                      │
+                       ─ CopilotStudioWebChat OOB ─▶
+                                      │
+                                      ▼
+                        Copilot Studio agent (your brain)
+                                      │
+                            (escalation) OOB ─▶
+                                      │
+                                      ▼
+                         D365 Omnichannel for CCaaS
 ```
 
-## Why this exists
+## What this is, in 30 seconds
 
-Microsoft 365 Copilot's built-in chat surface enforces LLM-driven turn timeouts and message-shape constraints that interfere with **long-running** Copilot Studio workflows. By using a Declarative Agent as a *launcher only* and rendering the actual conversation inside an **MCP App** iframe, you get:
+You have a **Copilot Studio agent**. You want it to live inside **Microsoft 365 Copilot**
+with **your own UI** — branded, with charts, with custom layouts. The native CS-to-M365-Copilot
+channel gives you the standard chat UI; this repo gives you a fully custom one.
 
-- ✅ Long-running conversations (no per-turn timeout from the host LLM)
-- ✅ Direct line to your Copilot Studio agent — no LLM-in-the-middle reinterpretation
-- ✅ Full WebChat UX (typing indicators, adaptive cards, attachments)
-- ✅ Single-purpose Declarative Agent — coexists with anything else in your M365 tenant
-- ✅ SSO with the signed-in M365 user (see [Authentication](#authentication))
+The CS agent stays the brain. We render a custom React widget inside M365 Copilot via a
+Declarative Agent + remote MCP server. The widget talks to your CS agent through the OOB
+[`@microsoft/agents-copilotstudio-client`](https://www.npmjs.com/package/@microsoft/agents-copilotstudio-client) SDK — same path Microsoft's own samples use.
+
+Live-agent escalation works on day one through CS Studio's OOB Settings → Agent transfers →
+**Omnichannel** tile. No code on our side.
+
+## When to use this (and when not to)
+
+→ Read [docs/COMPARISON.md](docs/COMPARISON.md) for the full decision matrix and a
+30-second flowchart. Short version:
+
+| If you want… | Use… |
+|---|---|
+| Plain CS chat in M365 Copilot | CS native channel (not this repo) |
+| **Custom-branded UI in M365 Copilot, with CS as brain, with escalation** | **This repo** |
+| Standalone branded WebChat on your website | This repo's SWA channel (same React source) |
+
+## Quickstart
+
+> Target maker time: **30 minutes from `git clone` to working in M365 Copilot.**
+>
+> Prereqs: Node 20+, Azure subscription, existing CS agent, M365 tenant where you can
+> sideload a Declarative Agent (CDX or your own dev tenant).
+
+```pwsh
+# 1. Clone & install
+git clone https://github.com/KarimaKT/MCSMCPapps.git
+cd MCSMCPapps
+npm install
+
+# 2. Set the parameters that matter (~5 minutes)
+copy webchat-ui\.env.dev.sample webchat-ui\.env.dev
+# Edit webchat-ui\.env.dev — see "Important parameters" below
+
+# 3. Build
+npm run build       # builds widget + SWA + MCP server
+
+# 4. Provision Azure (App Service + SWA)
+az login
+azd up              # ~5 min, creates App Service + SWA in your sub
+
+# 5. Publish the Declarative Agent to your tenant
+cd declarative-agent
+npx -y -p '@microsoft/teamsapp-cli@3.1.1' teamsapp account login m365
+npx -y -p '@microsoft/teamsapp-cli@3.1.1' teamsapp publish --env dev
+
+# 6. Have your tenant admin approve the app
+# Teams Admin Center → Manage apps → Eurozone Analyst → Allow
+# (CDX tenants auto-approve)
+
+# 7. Test
+# Open https://m365.cloud.microsoft/chat → Agents → your agent → ask a question
+```
+
+### Important parameters
+
+Everything a maker changes is at one of these knobs. Nothing else needs touching.
+
+| Parameter | File | What it does |
+|---|---|---|
+| `VITE_CS_ENVIRONMENT_ID` | `webchat-ui/.env.dev` | Power Platform environment GUID hosting your CS agent |
+| `VITE_CS_SCHEMA_NAME` | `webchat-ui/.env.dev` | CS agent schema name (Settings → Advanced) |
+| `VITE_CS_TENANT_ID` | `webchat-ui/.env.dev` | AAD tenant of the CS environment |
+| `VITE_ENTRA_CLIENT_ID` | `webchat-ui/.env.dev` | Entra app reg client id used for MSAL silent SSO |
+| `VITE_BRAND_AGENT_NAME` | `webchat-ui/.env.dev` | Display name in widget header |
+| `VITE_BRAND_LOGO_TEXT` | `webchat-ui/.env.dev` | Single-glyph logo (or `VITE_BRAND_LOGO_URL` for an image) |
+| `VITE_BRAND_ACCENT` | `webchat-ui/.env.dev` | Primary accent color (e.g. `#003399`) |
+| `VITE_BRAND_ACCENT_FG` | `webchat-ui/.env.dev` | Foreground color used on accent backgrounds |
+| `VITE_BRAND_FONT` | `webchat-ui/.env.dev` | Font stack |
+| `VITE_BRAND_COMPANY_NAME` | `webchat-ui/.env.dev` | Customer / org name |
+| `manifest.json: id` | `declarative-agent/appPackage/manifest.json` | **YOUR** new GUID for the Teams app |
+| `manifest.json: developer.*` | same | Your org name + URLs |
+
+→ Full details in [docs/SPEC.md §8](docs/SPEC.md#8-important-parameters-single-source-of-truth) (single source of truth).
+
+### Customize what?
+
+| You want to… | Touch this | Don't touch |
+|---|---|---|
+| Rebrand (colors, logo, name) | `webchat-ui/.env.dev` | anything else |
+| Change CS agent | env vars + `manifest.json: id` | code |
+| Add a chart, button, custom card to the widget | `webchat-ui/src/` | mcp-server, manifest |
+| Add a tool the model can call | `mcp-server/src/tools/` (one new file) | existing tools |
+| Change escalation routing / queues | CS Studio UI (no code) | nothing here |
+| Change DA description / starters | `declarative-agent/appPackage/declarativeAgent.json` | code |
+
+## Documentation map
+
+Start here, depending on who you are:
+
+- **You're evaluating this approach** → [docs/COMPARISON.md](docs/COMPARISON.md), [docs/SPEC.md](docs/SPEC.md)
+- **You're implementing** → [docs/MCP-APPS-CONTRACT.md](docs/MCP-APPS-CONTRACT.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- **You're testing / shipping** → [docs/TEST-PLAN.md](docs/TEST-PLAN.md)
+- **You're rebranding for your own deployment** → [docs/MAKER-CONFIG.md](docs/MAKER-CONFIG.md), [docs/BUILD-GUIDE.md](docs/BUILD-GUIDE.md)
+- **You're a Microsoft PM and want to know what's broken** → [docs/FEATURE-REQUESTS.md](docs/FEATURE-REQUESTS.md)
+- **You want the technical narrative for a blog** → [docs/BLOG.md](docs/BLOG.md)
+- **You want the story end-to-end** → [docs/WHAT-IS-THIS.md](docs/WHAT-IS-THIS.md)
 
 ## Repo layout
 
-| Path | Purpose |
-|---|---|
-| [webchat-ui/](webchat-ui/) | Vite + Bot Framework Web Chat UI; connects to your Copilot Studio agent via Direct Line. |
-| [mcp-app/](mcp-app/) | MCP App tool definition. Returns the MCP App payload that points to the hosted WebChat URL. |
-| [declarative-agent/](declarative-agent/) | M365 Declarative Agent manifest. Single-purpose launcher that calls the MCP App tool. |
-| [infra/](infra/) | Bicep + GitHub Actions for hosting the static WebChat UI on Azure Static Web Apps. |
-| [skills/mcp-app-launcher/](skills/mcp-app-launcher/) | A Copilot Studio skill that helps **other agent builders** apply this pattern. |
-| [docs/](docs/) | [WHAT-IS-THIS.md](docs/WHAT-IS-THIS.md) (terminology disambiguation: DA vs CS vs Agent Builder vs Agents SDK vs Bot Framework — read first if confused), [FINAL-RECIPE.md](docs/FINAL-RECIPE.md) (the 8 ingredients + 12 commandments + one-screen architecture), [M365-COPILOT-ONLY-DEPLOYMENT.md](docs/M365-COPILOT-ONLY-DEPLOYMENT.md) (foolproof org-wide rollout to M365 Copilot ONLY — not Teams/Outlook/Office), [BUILD-GUIDE.md](docs/BUILD-GUIDE.md) (manual / no-AI walkthrough), [AUTH-ARCHITECTURE.md](docs/AUTH-ARCHITECTURE.md) (six actors, four boundaries), [MAKER-CONFIG.md](docs/MAKER-CONFIG.md) (rebrand & identity), [UI-POSSIBILITIES.md](docs/UI-POSSIBILITIES.md) (what to build into the WebChat), [CAPABILITIES.md](docs/CAPABILITIES.md) (what the runtime can do + demo script), [ARCHITECTURE-CENTER-DRAFT.md](docs/ARCHITECTURE-CENTER-DRAFT.md) (Learn-style article), [BLOG-DRAFT.md](docs/BLOG-DRAFT.md) (better-together blog post draft), [IDs.md](docs/IDs.md), [AZURE-SUBSCRIPTION.md](docs/AZURE-SUBSCRIPTION.md), [PROGRESS.md](docs/PROGRESS.md), [IDEAS/](docs/IDEAS/) (parking lot). |
-| [Resources/](Resources/) | Source design docs (the original implementation guide). |
-
-## Quick start (consumer)
-
-> ⚠️ Prerequisites: Node 20+, Azure subscription, an existing Copilot Studio agent, M365 tenant where you can sideload a Declarative Agent.
-
-```powershell
-# 1. Clone
-git clone https://github.com/KarimaKT/MCSMCPapps.git
-cd MCSMCPapps
-
-# 2. Configure your Copilot Studio agent IDs
-cp webchat-ui/.env.example webchat-ui/.env
-# edit .env:  VITE_CS_BOT_ID, VITE_CS_TENANT_ID, VITE_CS_ENVIRONMENT_ID
-
-# 3. Run the WebChat UI locally to verify the connection
-cd webchat-ui
-npm install
-npm run dev
-# open http://localhost:5173 — should connect to your CS agent
-
-# 4. Deploy the WebChat UI to Azure Static Web Apps
-#    (see docs/BUILD-GUIDE.md §4)
-
-# 5. Update mcp-app/openCopilotStudioChat.json with your SWA URL.
-
-# 6. Package & sideload the Declarative Agent via the M365 Agents Toolkit
-#    (see docs/BUILD-GUIDE.md §6)
+```
+MCSMCPapps/
+├── webchat-ui/             # React app — single source, two delivery channels
+│   ├── src/
+│   │   ├── App.tsx         # Composer + BasicWebChat (BotFramework Web Chat OOB)
+│   │   ├── branding.ts     # readBrand(): all VITE_BRAND_* vars
+│   │   ├── cs/             # CS connection (CopilotStudioWebChat.createConnection — OOB)
+│   │   ├── host/           # skybridge bridge + host detection
+│   │   └── handoff/        # live-agent escalation hooks (used by CS topic, not us)
+│   └── .env.dev.sample     # the brand + CS connection env vars
+│
+├── mcp-server/             # Thin MCP server: serves the widget HTML, defines the tool
+│   ├── src/
+│   │   ├── index.ts        # HTTP host (Express + Streamable HTTP transport)
+│   │   ├── server.ts       # buildServer(): McpServer factory
+│   │   ├── config.ts       # loadConfig(): all env vars w/ JSDoc
+│   │   ├── tools/          # one file per tool (today: openCopilotStudioChat)
+│   │   ├── resources/      # one file per UI resource
+│   │   └── widget.ts       # imports the built widget HTML at startup
+│   └── package.json
+│
+├── declarative-agent/      # M365 Declarative Agent + MCP plugin manifest
+│   ├── appPackage/
+│   │   ├── manifest.json
+│   │   ├── declarativeAgent.json
+│   │   └── ai-plugin.json
+│   ├── m365agents.yml      # Agents Toolkit lifecycle
+│   └── teamsapp.yml        # legacy CLI shim
+│
+├── infra/                  # Bicep modules: SWA + App Service + identity
+│
+├── docs/                   # ← Read these
+│   ├── README-style entries:
+│   ├── SPEC.md             # PM spec: goals, non-goals, personas, success
+│   ├── ARCHITECTURE.md     # data flows, conv-id discipline, SLOs, failure modes
+│   ├── COMPARISON.md       # when to use this vs alternatives
+│   ├── MCP-APPS-CONTRACT.md# the wire contract (skybridge MIME, _meta keys)
+│   ├── TEST-PLAN.md        # test pyramid, manual scenarios, smoke
+│   ├── FEATURE-REQUESTS.md # urgent platform asks
+│   ├── BLOG.md             # technical narrative
+│   └── …
+│
+└── .github/workflows/      # CI (manifest scope guard, deploy)
 ```
 
-## Authentication
+## What you get out-of-the-box
 
-The embedded WebChat tries three SSO strategies in order:
+- **Streaming responses** from CS via Wave-2 (BotFramework Web Chat OOB)
+- **Adaptive Cards** rendered inline
+- **Suggested actions** ("Try…" buttons)
+- **Markdown** safely sanitized
+- **Inline charts** (CS returns data-URI PNGs from Power Automate quickchart actions)
+- **Branded chrome** via 8 build-time env vars
+- **Dataverse transcript logging** (CS does this; we surface a link)
+- **D365 Omnichannel handoff** (CS native; we configure, don't code)
+- **Auto first-message handoff** — the user's question that triggered the widget mount is
+  auto-relayed to CS so the user never has to retype
+- **Light/dark theme** matched to host
+- **Conversation id discipline** — CS owns the only id, we never mint a parallel one
+- **Same React source → two surfaces:** M365 Copilot widget AND public SWA URL
 
-1. **Teams JS SSO** (`microsoftTeams.authentication.getAuthToken`) — silent, used when the MCP App host exposes the Teams JS bridge.
-2. **MSAL.js silent acquisition** — silent if the user is already signed into M365 in the same browser session.
-3. **Copilot Studio "Authenticate with Microsoft" topic** — fallback; user clicks a one-time login card inside the chat.
+## Status (May 2026)
 
-Configure your CS agent for **Manual Entra (Microsoft) authentication** so it can validate the bearer token. See [docs/BUILD-GUIDE.md §7](docs/BUILD-GUIDE.md) for app registration steps.
+- ✅ All docs in place
+- ✅ MCP server with verified OpenAI Apps SDK contract (smoke tests passing)
+- ✅ DA published to CDX
+- 🔄 Phase 5h.3: replacing iframe-of-SWA with single-file React widget bundle (in progress)
+- 🔄 Phase 5h.4: replacing hand-rolled CS transport with `CopilotStudioWebChat.createConnection` OOB
+- ⏳ Live-agent escalation via D365 Omnichannel (configured in CS Studio, not yet
+  integration-tested in the widget)
 
-## Components & responsibilities
+→ Full progress in [docs/PROGRESS.md](docs/PROGRESS.md).
 
-| Component | Job | Lives in |
-|---|---|---|
-| **Declarative Agent** | Recognises a launch phrase ("open my agent"), calls one tool — that's it. | M365 Copilot |
-| **MCP App tool** | Returns an `mcp_app` payload pointing at the hosted UI. | MCP server (this repo) |
-| **WebChat UI** | Renders Bot Framework Web Chat, authenticates the user, opens a Direct Line conversation with your CS agent. | Azure Static Web Apps |
-| **Copilot Studio agent** | All reasoning, topics, actions, long-running flows. | Power Platform / Copilot Studio |
+## Contributing
 
-## Tenant topology
+This is a reference implementation, not a product. Forks welcome. PRs that:
 
-This pattern intentionally **spans two tenants** — there is no requirement that hosting and identity live together:
+1. Fix bugs in the contract / wire shape — yes, please
+2. Add tests — yes, please (see [docs/TEST-PLAN.md](docs/TEST-PLAN.md))
+3. Add new sample brokers (Genesys, LivePerson) for v2 — yes, please
+4. Add new UI features generic to all forks — yes, please
 
-```text
-Azure tenant                       M365 / CS tenant (e.g. CDX)
-──────────────────────────       ────────────────────────────────
-  Static Web App                     Copilot Studio agent
-  (serves WebChat HTML+JS)           M365 Copilot host
-                                     Entra app registration (for SSO)
-                                     User identities
-```
+PRs that fork off into your own customization should be merged into your own fork, not back
+upstream — keep this repo lean and generic so it works as a starting point for everyone.
 
-- The **Azure tenant** is just an HTTPS file host. Browsers fetch static assets cross-origin without auth.
-- The **CS / M365 tenant** is where all auth happens — the Entra app registration, the user identities, and the CS agent's auth config all live here.
-- The Entra **client ID + tenant ID** in `webchat-ui/.env` must point at the CS tenant, not the Azure tenant.
+## Trademarks & licensing
 
-## Security notes
+MIT (see [LICENSE](LICENSE)).
 
-- The MCP App iframe is sandboxed by the Copilot host. Treat it as an untrusted boundary.
-- Never put secrets (client secrets, Direct Line keys) in the WebChat bundle. Use a token broker (Azure Function) — see [docs/BUILD-GUIDE.md §7.2](docs/BUILD-GUIDE.md).
-- The Direct Line **secret** must stay server-side. The browser only ever receives short-lived **Direct Line tokens** scoped to a single conversation.
-- App registration redirect URIs must include the SWA hostname plus `https://*.cloud.microsoft` (Copilot iframe origin) — confirm exact origin during testing.
+This project is an unofficial reference implementation. **Not** a Microsoft product. It uses
+official Microsoft SDKs and follows official patterns documented at
+[microsoft/mcp-interactiveUI-samples](https://github.com/microsoft/mcp-interactiveUI-samples)
+and [microsoft/Agents](https://github.com/microsoft/Agents) — but is not affiliated with or
+endorsed by those teams beyond personal contribution.
 
-## Building this without AI assistance
+## Acknowledgments
 
-Follow [docs/BUILD-GUIDE.md](docs/BUILD-GUIDE.md). It contains every command, file, portal click, and verification step needed to reproduce this project from an empty machine.
-
-## What it can actually do
-
-See [docs/CAPABILITIES.md](docs/CAPABILITIES.md) for the full feature matrix — markdown reports, Adaptive Cards, suggested actions, long-running topics, SSO, theming, accessibility, and an end-to-end demo script.
-
-## Contributing & feedback
-
-This is a first-try pattern. PRs welcome — especially edge cases around MCP App host capabilities, CS agent auth modes, and Copilot iframe origins.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
-
-## Sister projects
-
-- **[ArcadeVsAgent](https://github.com/KarimaKT/ArcadeVsAgent)** — design-only sketch of a side-by-side MakeCode Arcade game + Copilot Studio agent that plays against you. Reuses this repo's MCP-server-backed UI widget pattern; demonstrates event-driven game-state coordination.
+- Microsoft 365 Copilot extensibility team (Declarative Agents, MCP Apps)
+- Copilot Studio team (Wave-2 SDK, Direct Engine API)
+- The `mcp-interactiveUI-samples` reference samples — canonical examples of the widget
+  contract that informed every architectural decision here
+- The OpenAI Apps SDK team for the protocol M365 Copilot's RemoteMCPServer client implements
+- Andreas Adner's January 2025 LinkedIn post that confirmed M365 Copilot supports both
+  OpenAI Apps SDK and MCP Apps — saved us a week of doubt
