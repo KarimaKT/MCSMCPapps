@@ -1,36 +1,48 @@
 /**
- * MCSMCPapps MCP server — HTTP host.
+ * MCSMCPapps MCP server — HTTP host (stateless transport).
  *
  * This file owns the network surface only:
  *   - Express setup, routes, JSON parsing
- *   - MCP session management (Streamable HTTP transport, mcp-session-id header)
- *   - Recovery semantics (404 "Session not found" tells clients to re-init)
+ *   - **Stateless** Streamable HTTP transport: a fresh `McpServer` +
+ *     `StreamableHTTPServerTransport` per request, closed when the
+ *     response stream closes.
  *
- * Tools and resources live in `tools/` and `resources/` — adding a new tool
- * does NOT require touching this file.
+ * Tools and resources live in `tools/` and `resources/` — adding a new
+ * tool does NOT require touching this file.
  *
- * # Recovery semantics
+ * # Why stateless
  *
- *   - Unknown session-id => 404 with JSON-RPC error -32001 "Session not
- *     found". Well-behaved MCP clients (M365 Copilot included) drop the
- *     session and re-initialize. This makes container restarts and scale
- *     events transparent: the next call after a restart triggers a fresh
- *     `initialize` on the new instance and the conversation continues.
- *   - Init request without a session-id => create new transport+server,
- *     hand back the new session-id in the response header.
+ * The session-keyed pattern (track sessions in a Map, recover with 404
+ * "Session not found") works for some clients but fails for M365 Copilot:
+ * with `enableJsonResponse: true` the SDK closes the response stream
+ * immediately after the init reply, which fires `transport.onclose`
+ * before our `onsessioninitialized` callback completes. The next request
+ * arrives with a session id that's already been removed from the map and
+ * gets a 404. The host gives up the tool call.
  *
- * # Why session-keyed and not stateless
+ * Microsoft's reference samples (oai-apps-sdk/trey-research, fieldops,
+ * zava-insurance, approvals-box) all use the stateless pattern: build a
+ * fresh `Server` per request. We do the same with `McpServer`.
  *
- * The MCP TS SDK enforces an init handshake at the `McpServer` instance
- * level. A truly stateless server (`sessionIdGenerator: undefined`) makes
- * each request build a fresh `McpServer`, which fails the second call
- * with "Bad Request: Server not initialized." See [docs/MCP-APPS-CONTRACT.md].
+ * # State concerns (none, in our case)
+ *
+ * Construction of the `McpServer` is sub-millisecond — it's just function
+ * registrations. The widget HTML is read once at module-load time and
+ * cached (`widget.ts`). The Copilot Studio conversation lives entirely
+ * inside the widget via the OOB SDK; nothing about it goes through MCP.
+ *
+ * # CORS for skybridge sandboxes
+ *
+ * M365 Copilot's RemoteMCPServer client calls us from the host turn
+ * processor (server-to-server, no Origin header). The widget itself is
+ * sandboxed with a `null` origin; if it ever calls back to us, browsers
+ * send `Origin: null`. We mirror MS's reference and treat `null` and
+ * missing Origin as allowed.
  */
 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+import cors, { type CorsOptions } from 'cors';
 import express, { type Request, type Response } from 'express';
-import { randomUUID } from 'node:crypto';
 import { loadConfig } from './config.js';
 import { buildServer, SERVER_NAME, SERVER_VERSION } from './server.js';
 
@@ -40,14 +52,34 @@ import { buildServer, SERVER_NAME, SERVER_VERSION } from './server.js';
 
 const config = loadConfig();
 const app = express();
-app.use(express.json({ limit: '1mb' }));
 
-/**
- * Active transports keyed by `mcp-session-id`. The transport owns the
- * session id and the response-stream lifecycle; the `McpServer` is wired
- * into the transport once at create time and cleaned up on transport close.
- */
-const transports = new Map<string, StreamableHTTPServerTransport>();
+const corsOptions: CorsOptions = {
+  origin: (origin, callback) => {
+    // Sandboxed iframes (M365 Copilot skybridge, ChatGPT Apps) send
+    // `null` as the origin. Server-to-server callers (the host turn
+    // processor) send no Origin header at all. Both are valid here.
+    if (!origin || origin === 'null') {
+      callback(null, origin ?? true);
+      return;
+    }
+    callback(null, origin);
+  },
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Accept',
+    'Mcp-Session-Id',
+    'mcp-session-id',
+    'Mcp-Protocol-Version',
+    'mcp-protocol-version',
+    'Last-Event-ID'
+  ],
+  exposedHeaders: ['Mcp-Session-Id'],
+  credentials: false
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+app.use(express.json({ limit: '1mb' }));
 
 // ---------------------------------------------------------------------------
 // Health endpoint (no MCP)
@@ -59,57 +91,35 @@ app.get('/', (_req: Request, res: Response) => {
       `${SERVER_NAME} v${SERVER_VERSION}`,
       `agentName: ${config.agentName}`,
       `swaOrigin: ${config.swaOrigin}`,
-      `endpoint:  POST /mcp`,
-      `active sessions: ${transports.size}`
+      `endpoint:  POST /mcp (stateless)`
     ].join('\n')
   );
 });
 
 // ---------------------------------------------------------------------------
-// MCP dispatch
+// MCP — stateless: fresh server + transport per request
 // ---------------------------------------------------------------------------
 
 async function dispatch(req: Request, res: Response): Promise<void> {
-  const sessionId = req.header('mcp-session-id');
-
-  // Existing session: route to its transport.
-  if (sessionId && transports.has(sessionId)) {
-    const transport = transports.get(sessionId)!;
-    await transport.handleRequest(req, res, req.body);
-    return;
-  }
-
-  // New session: only allowed on `initialize` (per MCP HTTP spec).
-  if (!sessionId && isInitializeRequest(req.body)) {
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      enableJsonResponse: true,
-      onsessioninitialized: (id) => {
-        transports.set(id, transport);
-      }
-    });
-    transport.onclose = () => {
-      if (transport.sessionId) {
-        transports.delete(transport.sessionId);
-      }
-    };
-    const server = buildServer(config);
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-    return;
-  }
-
-  // Unknown session-id (e.g., after a container restart) or non-init
-  // without a session-id. Tell the client to drop and re-initialize.
-  res.status(404).json({
-    jsonrpc: '2.0',
-    error: {
-      code: -32001,
-      message:
-        'Session not found. Please send an initialize request to start a new session.'
-    },
-    id: req.body?.id ?? null
+  const server = buildServer(config);
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined, // stateless mode
+    enableJsonResponse: true // return JSON instead of SSE
   });
+
+  res.on('close', () => {
+    transport.close().catch((err: unknown) => {
+      // eslint-disable-next-line no-console
+      console.error('[mcp] transport.close failed', err);
+    });
+    server.close().catch((err: unknown) => {
+      // eslint-disable-next-line no-console
+      console.error('[mcp] server.close failed', err);
+    });
+  });
+
+  await server.connect(transport);
+  await transport.handleRequest(req, res, req.body);
 }
 
 app.post('/mcp', async (req: Request, res: Response) => {
@@ -128,29 +138,41 @@ app.post('/mcp', async (req: Request, res: Response) => {
   }
 });
 
-// GET /mcp = SSE channel for server-initiated messages (e.g.
-// `notifications/tools/list_changed`). Same session model as POST.
+// GET /mcp — clients may probe or open a server→client SSE stream. In
+// stateless mode we let the transport answer with the protocol-correct
+// response (typically 405 Method Not Allowed for our setup).
 app.get('/mcp', async (req: Request, res: Response) => {
-  const sessionId = req.header('mcp-session-id');
-  if (!sessionId || !transports.has(sessionId)) {
-    res.status(404).json({
-      jsonrpc: '2.0',
-      error: { code: -32001, message: 'Session not found.' },
-      id: null
-    });
-    return;
+  try {
+    await dispatch(req, res);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[mcp] GET handler failed', err);
+    if (!res.headersSent) {
+      res.status(405).json({
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'Method not allowed.' },
+        id: null
+      });
+    }
   }
-  await transports.get(sessionId)!.handleRequest(req, res);
 });
 
-// DELETE /mcp = explicit session close.
+// DELETE /mcp — stateless: no per-server state to delete; let the
+// transport answer.
 app.delete('/mcp', async (req: Request, res: Response) => {
-  const sessionId = req.header('mcp-session-id');
-  if (sessionId && transports.has(sessionId)) {
-    await transports.get(sessionId)!.handleRequest(req, res);
-    return;
+  try {
+    await dispatch(req, res);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[mcp] DELETE handler failed', err);
+    if (!res.headersSent) {
+      res.status(405).json({
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'Method not allowed.' },
+        id: null
+      });
+    }
   }
-  res.status(204).end();
 });
 
 // ---------------------------------------------------------------------------
@@ -164,7 +186,7 @@ app.listen(config.port, () => {
       `[${SERVER_NAME}] v${SERVER_VERSION} listening on :${config.port}`,
       `  agentName: ${config.agentName}`,
       `  swaOrigin: ${config.swaOrigin}`,
-      `  POST /mcp  (Streamable HTTP)`
+      `  POST /mcp  (stateless Streamable HTTP)`
     ].join('\n')
   );
 });
