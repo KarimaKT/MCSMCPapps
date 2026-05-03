@@ -85,6 +85,12 @@ function App() {
   // Latest server-side OBO diagnostic block, surfaced in the error UI
   // so you can read it without opening devtools.
   const [toolDiag, setToolDiag] = useState<Record<string, unknown> | null>(null);
+  // Wait this long before falling back to MSAL silent SSO. Skybridge
+  // can mount the widget BEFORE the host has called the tool (e.g. on
+  // agent selection), so the host bridge needs time to deliver
+  // `toolOutput`. After this delay, if no host token has arrived, we
+  // assume legacy / anonymous mode and try MSAL.
+  const [msalGateOpen, setMsalGateOpen] = useState(false);
 
   // Prefer a token supplied by the M365 Copilot host through the tool
   // response `_meta.mcsmcpapps.ppToken`. Mode of operation:
@@ -120,8 +126,23 @@ function App() {
     return () => unsub();
   }, []);
 
+  // Open the MSAL gate after a delay. Skybridge mounts the widget
+  // before the user sends a message in some flows, so the host bridge
+  // hasn't delivered `toolOutput` yet. Wait 4 seconds before assuming
+  // legacy mode. Long enough for the host to deliver, short enough that
+  // the standalone SWA channel still feels snappy.
+  useEffect(() => {
+    if (hostTokenReceived) return;
+    const t = window.setTimeout(() => {
+      trace('msal-gate-opened-after-timeout');
+      setMsalGateOpen(true);
+    }, 4000);
+    return () => window.clearTimeout(t);
+  }, [hostTokenReceived]);
+
   useEffect(() => {
     if (hostTokenReceived) return; // host gave us a token — skip MSAL
+    if (!msalGateOpen) return; // wait for host bridge timeout
     trace('app-mounted', {
       hasClientId: Boolean(env.clientId),
       hasTenantId: Boolean(env.tenantId),
@@ -154,7 +175,7 @@ function App() {
         });
         setError(`MSAL init failed: ${err instanceof Error ? err.message : String(err)}`);
       });
-  }, [env.clientId, env.tenantId, hostTokenReceived]);
+  }, [env.clientId, env.tenantId, hostTokenReceived, msalGateOpen]);
 
   useEffect(() => {
     if (hostTokenReceived) return; // host gave us a token — skip MSAL
