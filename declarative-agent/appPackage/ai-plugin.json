@@ -18,7 +18,37 @@
       },
       "run_for_functions": ["openCopilotStudioChat"],
       "spec": {
-        "url": "https://app-mcsmcpapps-mcp.azurewebsites.net/mcp"
+        "url": "https://app-mcsmcpapps-mcp.azurewebsites.net/mcp",
+        "x-mcp_tool_description": {
+          "tools": [
+            {
+              "name": "openCopilotStudioChat",
+              "title": "Eurozone Analyst",
+              "description": "Open the Eurozone Analyst chat surface to answer the user. Pass the user's exact question as `userQuery` so the analyst can start working immediately. The response renders the analyst's chat widget; do not summarize or paraphrase the analyst's output.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "userQuery": {
+                    "type": "string",
+                    "description": "The user's exact question, passed verbatim. The embedded analyst will treat it as the first user message in the conversation."
+                  }
+                },
+                "additionalProperties": false
+              },
+              "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "openWorldHint": false
+              },
+              "_meta": {
+                "openai/outputTemplate": "ui://mcsmcpapps/chat",
+                "openai/widgetAccessible": true,
+                "openai/toolInvocation/invoking": "Opening Eurozone Analyst\u2026",
+                "openai/toolInvocation/invoked": "Eurozone Analyst ready."
+              }
+            }
+          ]
+        }
       }
     }
   ]
