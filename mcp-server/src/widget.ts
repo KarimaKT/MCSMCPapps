@@ -1,33 +1,43 @@
 /**
- * Builds the HTML widget served as a UI resource (`ui://mcsmcpapps/chat`).
+ * Widget HTML returned by the chat-widget resource.
  *
- * Contract notes (the part that took us a day to figure out):
+ * # MIGRATION (planned for v0.6 — see [docs/SPEC.md] §11 D3)
  *
- *   - The host (M365 Copilot today, ChatGPT Apps SDK tomorrow) only renders
- *     this HTML if the resource MIME type is exactly
- *     `text/html+skybridge`. Plain `text/html` (and the spec-future
- *     `text/html;profile=mcp-app`) are silently dropped \u2014 you get a blank
- *     card. Verified against Microsoft's reference at
- *     github.com/microsoft/mcp-interactiveUI-samples (oai-apps-sdk samples).
- *     The MIME is set by the server in `index.ts`; we just have to honor it
- *     here.
+ *   The current shape is an **iframe shell** that loads the Static Web App.
+ *   This works for the standalone SWA channel but does NOT reliably render
+ *   inside the M365 Copilot skybridge sandbox: while `_meta.ui.csp.frameDomains`
+ *   nominally allows sub-iframes, OpenAI Apps SDK docs explicitly discourage
+ *   the pattern and Microsoft's own samples never use it.
+ *
+ *   The v0.6 fix is to **inline the React app as a single-file HTML bundle**
+ *   (via `vite-plugin-singlefile` in webchat-ui) and have this module simply
+ *   `readFileSync()` that bundle at server start. Plan documented in
+ *   [docs/ARCHITECTURE.md §3.2].
+ *
+ * # Current contract (v0.5)
+ *
+ *   - The host (M365 Copilot, ChatGPT Apps SDK) only renders this HTML if
+ *     the resource MIME type is exactly `text/html+skybridge`. Plain
+ *     `text/html` and `text/html;profile=mcp-app` are silently dropped.
+ *     The MIME is set by `resources/chatWidget.ts`; this module returns the
+ *     body only.
  *
  *   - The host delivers the tool's input + result into the widget iframe
- *     as JSON-RPC notifications over `postMessage` from `window.parent`:
- *         method = 'ui/notifications/tool-input'   \u2192 the args you passed
- *         method = 'ui/notifications/tool-result'  \u2192 the full tool result
- *     ChatGPT also exposes the legacy `window.openai.toolInput` /
- *     `toolOutput` snapshot for compatibility. We listen to both so we
- *     pick up `userQuery` regardless of host.
- *
- *   - The widget iframes the SWA so the user gets the full branded chat.
- *     For that to work, the resource's `_meta.ui.csp.frameDomains` must
- *     include the SWA origin (set in `index.ts`).
+ *     as JSON-RPC notifications from `window.parent`:
+ *         method = 'ui/notifications/tool-input'   → the args you passed
+ *         method = 'ui/notifications/tool-result'  → the full tool result
+ *     M365 Copilot ALSO exposes a `window.openai.toolInput / toolOutput`
+ *     snapshot. We listen to both for portability.
  *
  *   - When `userQuery` is present we relay it to the inner SWA via
  *     `postMessage`. The SWA queues it and auto-sends as the user's first
- *     message the moment its Copilot Studio conversation opens \u2014 so the
+ *     message the moment its Copilot Studio conversation opens — so the
  *     user never has to retype.
+ *
+ * # See also
+ *
+ *   - [docs/MCP-APPS-CONTRACT.md] — the verified MIME / `_meta` contract
+ *   - [mcp-server/src/resources/chatWidget.ts] — registers this HTML
  */
 
 export interface WidgetHtmlOptions {

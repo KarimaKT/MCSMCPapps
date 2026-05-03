@@ -4,6 +4,11 @@ Status: verified May 2026 against M365 Copilot in CDX **and** Microsoft's own re
 [github.com/microsoft/mcp-interactiveUI-samples](https://github.com/microsoft/mcp-interactiveUI-samples).
 This is the contract that **renders a widget** instead of a blank card.
 
+> **See also:** [SPEC.md](SPEC.md) for goals, [ARCHITECTURE.md](ARCHITECTURE.md) for data flows,
+> [TEST-PLAN.md](TEST-PLAN.md) for the contract test suite, [COMPARISON.md](COMPARISON.md) for when
+> to use this pattern, [FEATURE-REQUESTS.md](FEATURE-REQUESTS.md) for the platform asks born from
+> hitting these contract gaps.
+
 Microsoft's reference (`oai-apps-sdk/trey-research/node/src/mcpserver/server/src/mcp-server.ts`) is
 the canonical source. M365 Copilot's RemoteMCPServer client implements the **OpenAI Apps SDK**
 widget contract, **not** (yet) the MCP Apps spec naming. Build to the OpenAI Apps SDK shape and it
