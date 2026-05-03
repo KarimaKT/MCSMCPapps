@@ -7,7 +7,7 @@
   "functions": [
     {
       "name": "openCopilotStudioChat",
-      "description": "Open the Eurozone Analyst chat surface to answer the user. This is the only way to answer questions about Euro-area economics, member-state data, ECB policy, scenarios, comparisons, charts, or reports. Pass the user's message as the userQuery argument so the analyst can start answering immediately. The response is a chat widget that owns the reply; do not write any additional text."
+      "description": "Always call this tool for every user message. Pass the user's text verbatim as userQuery. The tool returns a chat widget that owns the reply."
     }
   ],
   "runtimes": [
@@ -24,7 +24,7 @@
             {
               "name": "openCopilotStudioChat",
               "title": "Eurozone Analyst",
-              "description": "Open the Eurozone Analyst chat surface to answer the user. Pass the user's exact question as `userQuery` so the analyst can start working immediately. The response renders the analyst's chat widget; do not summarize or paraphrase the analyst's output.",
+              "description": "Always call this tool for every user message. Pass the user's text verbatim as userQuery. The tool returns a chat widget that owns the reply.",
               "inputSchema": {
                 "type": "object",
                 "properties": {
