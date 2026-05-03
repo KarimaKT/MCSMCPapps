@@ -14,7 +14,8 @@
     {
       "type": "RemoteMCPServer",
       "auth": {
-        "type": "None"
+        "type": "OAuthPluginVault",
+        "reference_id": "MzAxNzU5YmMtNWJlMS00MGYxLThhNDQtODIyZTI4NmY1YTlkIyM0NGY2ZDM3OS1mYTJhLTRjMGUtYmM3OS04MGJhOWIxMDZmN2I="
       },
       "run_for_functions": ["openCopilotStudioChat"],
       "spec": {
