@@ -124,7 +124,7 @@ Start here, depending on who you are:
 - **You're evaluating this approach** → [docs/COMPARISON.md](docs/COMPARISON.md), [docs/SPEC.md](docs/SPEC.md)
 - **You're implementing** → [docs/MCP-APPS-CONTRACT.md](docs/MCP-APPS-CONTRACT.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - **You're testing / shipping** → [docs/TEST-PLAN.md](docs/TEST-PLAN.md)
-- **You're rebranding for your own deployment** → [docs/MAKER-CONFIG.md](docs/MAKER-CONFIG.md), [docs/BUILD-GUIDE.md](docs/BUILD-GUIDE.md)
+- **You're rebranding for your own deployment** → [docs/WIDGET-CUSTOMIZATION.md](docs/WIDGET-CUSTOMIZATION.md), [docs/MAKER-CONFIG.md](docs/MAKER-CONFIG.md), [docs/BUILD-GUIDE.md](docs/BUILD-GUIDE.md)
 - **You're a Microsoft PM and want to know what's broken** → [docs/FEATURE-REQUESTS.md](docs/FEATURE-REQUESTS.md)
 - **You want the technical narrative for a blog** → [docs/BLOG.md](docs/BLOG.md)
 - **You want the story end-to-end** → [docs/WHAT-IS-THIS.md](docs/WHAT-IS-THIS.md)

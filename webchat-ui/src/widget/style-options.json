@@ -1,0 +1,40 @@
+{
+  "$comment": "Default styleOptions for the Eurozone Analyst widget. Maker workflow: open CS Kit Webchat Playground (https://aka.ms/CopilotStudioKit), tweak visuals, export styleOptions JSON, paste here, rebuild. Field reference: https://github.com/microsoft/BotFramework-WebChat/blob/main/packages/api/src/StyleOptions.ts.",
+
+  "accent": "#003399",
+  "backgroundColor": "#ffffff",
+
+  "bubbleBackground": "#f1f3f5",
+  "bubbleTextColor": "#111111",
+  "bubbleBorderRadius": 12,
+  "bubbleMaxWidth": 640,
+
+  "bubbleFromUserBackground": "#003399",
+  "bubbleFromUserTextColor": "#ffd200",
+  "bubbleFromUserBorderRadius": 12,
+
+  "botAvatarInitials": "EA",
+  "botAvatarBackgroundColor": "#003399",
+  "botAvatarTextColor": "#ffd200",
+
+  "userAvatarInitials": "",
+  "hideUploadButton": false,
+
+  "rootHeight": "100%",
+  "rootWidth": "100%",
+  "rootZIndex": 0,
+
+  "sendBoxBackground": "#ffffff",
+  "sendBoxTextColor": "#1a1a1a",
+  "sendBoxBorderTop": "1px solid #e2e3e6",
+  "sendBoxButtonShadeColorOnHover": "rgba(0, 51, 153, 0.1)",
+
+  "suggestedActionLayout": "stacked",
+  "suggestedActionBackgroundColorOnHover": "rgba(0, 51, 153, 0.1)",
+  "suggestedActionBorderColor": "#003399",
+  "suggestedActionTextColor": "#003399",
+
+  "fontSizeSmall": "85%",
+  "primaryFont": "\"Segoe UI\", system-ui, -apple-system, Roboto, sans-serif",
+  "monospaceFont": "Menlo, Consolas, \"Courier New\", monospace"
+}

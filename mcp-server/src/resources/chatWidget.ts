@@ -44,6 +44,20 @@ export const WIDGET_MIME_TYPE = 'text/html+skybridge';
  * Build the `_meta` block for the resource descriptor and `contents[0]`.
  * Mirrors the tool descriptor `_meta` (see tools/openCopilotStudioChat.ts)
  * and adds the CSP allowlists the sandbox needs.
+ *
+ * # CSP shape (v0.6 single-file widget)
+ *
+ *   - `connectDomains` — fetch / WebSocket targets the widget calls:
+ *       - Power Platform API (CS Direct Engine)
+ *       - login.microsoftonline.com (MSAL)
+ *       - the SWA origin (only used for the standalone channel; harmless
+ *         here)
+ *   - `resourceDomains` — static asset hosts. Empty in v0.6 because the
+ *     bundle inlines all assets via vite-plugin-singlefile.
+ *   - `frameDomains` — empty in v0.6. The widget is a single self-contained
+ *     HTML; it does not iframe any external origin. Dropping `frameDomains`
+ *     also lowers OpenAI Apps SDK review scrutiny (their docs explicitly
+ *     discourage embedding sub-iframes).
  */
 export function buildResourceMeta(
   config: ServerConfig
@@ -57,20 +71,18 @@ export function buildResourceMeta(
     'openai/toolInvocation/invoked': `${config.agentName} ready.`,
     ui: {
       // `domain` is required for the host's "fullscreen punch-out" UI.
+      // Use the SWA origin as the canonical domain for this widget.
       domain: swaOrigin,
       prefersBorder: true,
       csp: {
-        // Hosts the widget can reach via fetch/WebSocket.
         connectDomains: [
-          swaOrigin,
           'https://*.api.powerplatform.com',
-          'https://login.microsoftonline.com'
+          'https://login.microsoftonline.com',
+          swaOrigin
         ],
-        // Hosts the widget can load static resources (img, font, script-src).
-        resourceDomains: [swaOrigin],
-        // v0.5 (iframe-of-SWA): SWA origin must be on this allowlist.
-        // v0.6 (single-file bundle): this can be removed.
-        frameDomains: [swaOrigin]
+        resourceDomains: [],
+        // No iframes inside the widget. Single-file bundle.
+        frameDomains: []
       }
     }
   };

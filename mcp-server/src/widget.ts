@@ -1,161 +1,110 @@
 /**
- * Widget HTML returned by the chat-widget resource.
+ * Widget HTML loader.
  *
- * # MIGRATION (planned for v0.6 — see [docs/SPEC.md] §11 D3)
+ * Reads the single-file React bundle produced by
+ * `webchat-ui/vite.widget.config.ts` and serves it as the body of the
+ * `ui://mcsmcpapps/chat` resource (MIME `text/html+skybridge`).
  *
- *   The current shape is an **iframe shell** that loads the Static Web App.
- *   This works for the standalone SWA channel but does NOT reliably render
- *   inside the M365 Copilot skybridge sandbox: while `_meta.ui.csp.frameDomains`
- *   nominally allows sub-iframes, OpenAI Apps SDK docs explicitly discourage
- *   the pattern and Microsoft's own samples never use it.
+ * # Where the bundle lives
  *
- *   The v0.6 fix is to **inline the React app as a single-file HTML bundle**
- *   (via `vite-plugin-singlefile` in webchat-ui) and have this module simply
- *   `readFileSync()` that bundle at server start. Plan documented in
- *   [docs/ARCHITECTURE.md §3.2].
+ *   - **Local dev:** `webchat-ui/dist-widget/index.widget.html` (built by
+ *     `npm run build:widget` in webchat-ui).
+ *   - **App Service:** the deploy step copies the bundle into
+ *     `mcp-server/dist/assets/widget.html`. This is the canonical runtime
+ *     path. The CI workflow performs the copy.
  *
- * # Current contract (v0.5)
+ * We try a small list of candidate paths in order, log which one matched,
+ * and cache the file contents in memory at startup. The file is small
+ * (~5 MB) and never changes for a given deployment, so caching is safe.
  *
- *   - The host (M365 Copilot, ChatGPT Apps SDK) only renders this HTML if
- *     the resource MIME type is exactly `text/html+skybridge`. Plain
- *     `text/html` and `text/html;profile=mcp-app` are silently dropped.
- *     The MIME is set by `resources/chatWidget.ts`; this module returns the
- *     body only.
+ * # If no bundle is found
  *
- *   - The host delivers the tool's input + result into the widget iframe
- *     as JSON-RPC notifications from `window.parent`:
- *         method = 'ui/notifications/tool-input'   → the args you passed
- *         method = 'ui/notifications/tool-result'  → the full tool result
- *     M365 Copilot ALSO exposes a `window.openai.toolInput / toolOutput`
- *     snapshot. We listen to both for portability.
+ * The server logs a clear error and returns a minimal fallback HTML
+ * explaining the missing-build situation. This makes "I forgot to run
+ * `npm run build:widget`" easy to diagnose, instead of an empty card.
  *
- *   - When `userQuery` is present we relay it to the inner SWA via
- *     `postMessage`. The SWA queues it and auto-sends as the user's first
- *     message the moment its Copilot Studio conversation opens — so the
- *     user never has to retype.
+ * # Customization workflow for makers
  *
- * # See also
- *
- *   - [docs/MCP-APPS-CONTRACT.md] — the verified MIME / `_meta` contract
- *   - [mcp-server/src/resources/chatWidget.ts] — registers this HTML
+ * Maker editing `webchat-ui/src/widget/style-options.json` and rebuilding
+ * the widget changes nothing in this file. The MCP server picks up the
+ * fresh bundle on next process start.
  */
 
+import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+/** Candidate locations for the prebuilt widget HTML, in priority order. */
+const CANDIDATES = [
+  // 1. Co-located with the deployed mcp-server (CI populates this).
+  resolve(__dirname, 'assets', 'widget.html'),
+  resolve(__dirname, '..', 'assets', 'widget.html'),
+  // 2. Local dev — built by `npm run build:widget` in webchat-ui.
+  resolve(__dirname, '..', '..', 'webchat-ui', 'dist-widget', 'index.widget.html'),
+  resolve(__dirname, '..', '..', '..', 'webchat-ui', 'dist-widget', 'index.widget.html')
+];
+
+function loadFromDisk(): { path: string; html: string } | null {
+  for (const p of CANDIDATES) {
+    if (existsSync(p)) {
+      try {
+        const html = readFileSync(p, 'utf8');
+        return { path: p, html };
+      } catch {
+        // Try the next candidate.
+      }
+    }
+  }
+  return null;
+}
+
+function fallbackHtml(reason: string): string {
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8" /><title>Widget unavailable</title>
+<style>body{font-family:Segoe UI,sans-serif;padding:24px;color:#8b0000}</style>
+</head><body>
+<h2>Widget bundle not found</h2>
+<p>${reason}</p>
+<p>Build the widget with <code>npm run build:widget</code> in <code>webchat-ui/</code>,
+then restart this server.</p>
+</body></html>`;
+}
+
+/** Cached HTML body. Loaded at module import time. */
+const loaded = loadFromDisk();
+
+if (loaded) {
+  // eslint-disable-next-line no-console
+  console.log(`[widget] loaded bundle from ${loaded.path} (${loaded.html.length} bytes)`);
+} else {
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[widget] no bundle found. Tried:\n  ${CANDIDATES.join('\n  ')}`
+  );
+}
+
+const cachedHtml = loaded?.html ??
+  fallbackHtml('No prebuilt widget HTML was found at any expected location.');
+
+/**
+ * Get the widget HTML body for the chat-widget resource.
+ *
+ * The body is fully self-contained (CSS + JS inlined). Callers wrap it in
+ * the resource descriptor with MIME `text/html+skybridge`.
+ *
+ * The `_opts` parameter is kept for API compatibility with the previous
+ * dynamic-template version. We no longer interpolate at request time —
+ * branding and behavior are baked into the bundle at build time, exactly
+ * the way Microsoft's reference samples do it.
+ */
 export interface WidgetHtmlOptions {
   swaOrigin: string;
   agentName: string;
 }
 
-const POSTMESSAGE_TYPE = 'mcsmcpapps:firstMessage';
-const READY_TYPE = 'mcsmcpapps:ready';
-
-export function renderWidgetHtml(opts: WidgetHtmlOptions): string {
-  const { swaOrigin, agentName } = opts;
-  const safeName = escapeHtml(agentName);
-  const safeOrigin = escapeAttr(swaOrigin);
-
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>${safeName}</title>
-    <style>
-      html, body { height: 100%; width: 100%; margin: 0; padding: 0; background: #fff; }
-      #mcsmcpapps-chat { height: 100%; width: 100%; min-height: 520px; border: 0; display: block; }
-    </style>
-  </head>
-  <body>
-    <iframe
-      id="mcsmcpapps-chat"
-      src="${safeOrigin}/?embedded=1"
-      title="${safeName}"
-      allow="clipboard-write; microphone; camera"
-      referrerpolicy="strict-origin-when-cross-origin"
-    ></iframe>
-    <script>
-      (function () {
-        var iframe = document.getElementById('mcsmcpapps-chat');
-        var swaOrigin = ${JSON.stringify(swaOrigin)};
-        var pendingQuery = null;
-        var iframeReady = false;
-
-        function flush() {
-          if (!iframeReady || !pendingQuery || !iframe.contentWindow) return;
-          try {
-            iframe.contentWindow.postMessage(
-              { type: ${JSON.stringify(POSTMESSAGE_TYPE)}, text: pendingQuery },
-              swaOrigin
-            );
-            pendingQuery = null;
-          } catch (e) { /* ignore */ }
-        }
-
-        function readUserQuery(payload) {
-          if (!payload) return null;
-          if (typeof payload.userQuery === 'string' && payload.userQuery) return payload.userQuery;
-          var sc = payload.structuredContent;
-          if (sc && typeof sc.userQuery === 'string' && sc.userQuery) return sc.userQuery;
-          var meta = payload._meta;
-          if (meta && meta.mcsmcpapps && typeof meta.mcsmcpapps.userQuery === 'string' && meta.mcsmcpapps.userQuery) {
-            return meta.mcsmcpapps.userQuery;
-          }
-          return null;
-        }
-
-        // ----- MCP Apps bridge: JSON-RPC notifications from window.parent -----
-        window.addEventListener('message', function (e) {
-          // Inner SWA \u2192 we route by origin.
-          if (e.origin === swaOrigin) {
-            if (e.data && e.data.type === ${JSON.stringify(READY_TYPE)}) {
-              iframeReady = true;
-              flush();
-            }
-            return;
-          }
-          // Host \u2192 only accept messages from window.parent.
-          if (e.source !== window.parent) return;
-          var msg = e.data;
-          if (!msg || msg.jsonrpc !== '2.0') return;
-          if (msg.method === 'ui/notifications/tool-input' ||
-              msg.method === 'ui/notifications/tool-result') {
-            var q = readUserQuery(msg.params);
-            if (q) { pendingQuery = q; flush(); }
-          }
-        }, false);
-
-        // ----- OpenAI Apps SDK compatibility: window.openai snapshot -----
-        try {
-          var w = (window).openai;
-          if (w) {
-            var t = w.toolInput || w.toolOutput;
-            var q0 = readUserQuery(t);
-            if (q0) { pendingQuery = q0; flush(); }
-          }
-        } catch (e) { /* ignore */ }
-
-        // ChatGPT fires this when host globals change (toolInput/toolOutput).
-        window.addEventListener('openai:set_globals', function (event) {
-          try {
-            var g = (event && event.detail && event.detail.globals) || {};
-            var q1 = readUserQuery(g.toolInput) || readUserQuery(g.toolOutput);
-            if (q1) { pendingQuery = q1; flush(); }
-          } catch (e) { /* ignore */ }
-        }, { passive: true });
-      })();
-    </script>
-  </body>
-</html>`;
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function escapeAttr(s: string): string {
-  return escapeHtml(s);
+export function renderWidgetHtml(_opts: WidgetHtmlOptions): string {
+  return cachedHtml;
 }

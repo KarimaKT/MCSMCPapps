@@ -9,6 +9,7 @@ on:
     branches: [main]
     paths:
       - 'mcp-server/**'
+      - 'webchat-ui/**'
       - '.github/workflows/azure-mcp-server.yml'
   workflow_dispatch:
 
@@ -29,15 +30,47 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: mcp-server/package-lock.json
+          cache-dependency-path: |
+            mcp-server/package-lock.json
+            webchat-ui/package-lock.json
 
-      - name: Install
+      # ----- Build the single-file widget bundle (webchat-ui) -----
+      - name: Install (webchat-ui)
+        working-directory: webchat-ui
+        run: npm ci --no-audit --no-fund
+
+      - name: Build widget bundle
+        working-directory: webchat-ui
+        env:
+          # Brand vars baked into the widget at build time. Override per
+          # environment via repo Variables / Secrets.
+          VITE_CS_ENVIRONMENT_ID: ${{ vars.VITE_CS_ENVIRONMENT_ID }}
+          VITE_CS_SCHEMA_NAME: ${{ vars.VITE_CS_SCHEMA_NAME }}
+          VITE_AAD_TENANT_ID: ${{ vars.VITE_AAD_TENANT_ID }}
+          VITE_AAD_CLIENT_ID: ${{ vars.VITE_AAD_CLIENT_ID }}
+          VITE_AAD_SCOPE: ${{ vars.VITE_AAD_SCOPE }}
+          VITE_BRAND_AGENT_NAME: ${{ vars.VITE_BRAND_AGENT_NAME }}
+          VITE_BRAND_COMPANY_NAME: ${{ vars.VITE_BRAND_COMPANY_NAME }}
+          VITE_BRAND_ACCENT_COLOR: ${{ vars.VITE_BRAND_ACCENT_COLOR }}
+          VITE_BRAND_ACCENT_FOREGROUND: ${{ vars.VITE_BRAND_ACCENT_FOREGROUND }}
+          VITE_BRAND_FONT_FAMILY: ${{ vars.VITE_BRAND_FONT_FAMILY }}
+          VITE_BRAND_BOT_AVATAR_INITIALS: ${{ vars.VITE_BRAND_BOT_AVATAR_INITIALS }}
+        run: npm run build:widget
+
+      # ----- Build the MCP server -----
+      - name: Install (mcp-server)
         working-directory: mcp-server
         run: npm ci --no-audit --no-fund
 
-      - name: Build
+      - name: Build (mcp-server)
         working-directory: mcp-server
         run: npm run build
+
+      - name: Bundle widget into mcp-server dist/assets
+        run: |
+          mkdir -p mcp-server/dist/assets
+          cp webchat-ui/dist-widget/index.widget.html mcp-server/dist/assets/widget.html
+          ls -lh mcp-server/dist/assets
 
       - name: Strip dev dependencies for the deployable artifact
         working-directory: mcp-server
