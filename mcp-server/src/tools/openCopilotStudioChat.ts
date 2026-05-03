@@ -103,6 +103,10 @@ export function registerOpenCopilotStudioChatTool(
       // window). When SSO is disabled the widget falls back to MSAL.
       const entra = loadEntraConfig();
       const ctx = getAuthContext();
+      // eslint-disable-next-line no-console
+      console.log(
+        `[tool] openCopilotStudioChat invoked: ssoEnabled=${Boolean(entra)} hasCtx=${Boolean(ctx)} userQueryLen=${userQuery.length}`
+      );
       const powerPlatformToken = entra && ctx
         ? await exchangeForPowerPlatformToken(entra)
         : null;

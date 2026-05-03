@@ -65,9 +65,19 @@ export interface AuthContext {
 
 const storage = new AsyncLocalStorage<AuthContext | null>();
 
+/**
+ * Module-level fallback. The SDK's request handler chain occasionally
+ * loses AsyncLocalStorage context across internal awaits (the request
+ * arrives, init/tools-list/tools-call happen on different async stacks).
+ * Since the stateless transport processes ONE request per Express
+ * dispatch, we set this synchronously in the middleware and read it in
+ * the tool handler. Cleared in a `finally` after the response closes.
+ */
+let currentCtx: AuthContext | null = null;
+
 /** Read the current request's auth context (null when feature is off). */
 export function getAuthContext(): AuthContext | null {
-  return storage.getStore() ?? null;
+  return storage.getStore() ?? currentCtx;
 }
 
 /**
@@ -171,6 +181,16 @@ export function entraAuthMiddleware(
         issuer: expectedIssuer
       });
       const ctx: AuthContext = { claims: payload, inboundToken: token };
+      // eslint-disable-next-line no-console
+      console.log(
+        `[auth] token verified (sub=${payload.sub ?? '?'}, oid=${payload.oid ?? '?'})`
+      );
+      // Set both AsyncLocalStorage AND the module-level fallback. The
+      // module-level one is cleared on response close.
+      currentCtx = ctx;
+      res.on('close', () => {
+        if (currentCtx === ctx) currentCtx = null;
+      });
       storage.run(ctx, () => next());
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -208,7 +228,13 @@ export async function exchangeForPowerPlatformToken(
     return null;
   }
   const ctx = getAuthContext();
-  if (!ctx) return null;
+  if (!ctx) {
+    // eslint-disable-next-line no-console
+    console.warn('[auth] OBO skipped: no auth context (was middleware bypassed?)');
+    return null;
+  }
+  // eslint-disable-next-line no-console
+  console.log('[auth] OBO start');
 
   const params = new URLSearchParams({
     grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
@@ -232,7 +258,10 @@ export async function exchangeForPowerPlatformToken(
       return null;
     }
     const json = (await resp.json()) as { access_token?: string };
-    return typeof json.access_token === 'string' ? json.access_token : null;
+    const got = typeof json.access_token === 'string' ? json.access_token : null;
+    // eslint-disable-next-line no-console
+    console.log(`[auth] OBO ok (token length=${got?.length ?? 0})`);
+    return got;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // eslint-disable-next-line no-console
