@@ -45,7 +45,12 @@ import cors, { type CorsOptions } from 'cors';
 import express, { type Request, type Response } from 'express';
 import { entraAuthMiddleware, loadEntraConfig } from './auth.js';
 import { loadConfig } from './config.js';
+import { installFileLogger } from './fileLogger.js';
 import { buildServer, SERVER_NAME, SERVER_VERSION } from './server.js';
+
+// Install the persistent file logger BEFORE any other module logs so
+// startup banners are captured. See fileLogger.ts for why this exists.
+installFileLogger();
 
 // ---------------------------------------------------------------------------
 // Wiring
