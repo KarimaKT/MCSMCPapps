@@ -275,6 +275,7 @@ function ErrorState({ payload }: { payload: ToolPayload }) {
 function AdaptiveCardBlock({ card }: { card: AdaptiveCardPayload }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const acRef = useRef<AdaptiveCards.AdaptiveCard | null>(null);
+  const submittingRef = useRef<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -321,46 +322,57 @@ function AdaptiveCardBlock({ card }: { card: AdaptiveCardPayload }) {
         }
         if (action instanceof AdaptiveCards.SubmitAction) {
           // v0.7.1: post the form back to the live CS conversation.
-          // We collect every input value from the rendered card, then
-          // call the `submitAdaptiveCardAction` tool. The host will
-          // re-render the widget with CS's reply (next card / next text).
+          // Reads input values from the rendered card, calls the
+          // `submitAdaptiveCardAction` tool. The host re-renders the
+          // widget with CS's reply (next card / next text).
           (async () => {
+            // Double-click guard via ref. State setters are async, so
+            // checking `submitting` inline would race.
+            if (submittingRef.current) return;
+            submittingRef.current = true;
             setSubmitError(null);
-            const liveCard = acRef.current;
-            if (!liveCard) return;
-            const value: Record<string, unknown> = {};
             try {
-              const inputs = liveCard.getAllInputs();
-              for (const input of inputs) {
-                if (input.id) value[input.id] = input.value;
+              const liveCard = acRef.current;
+              if (!liveCard) return;
+              const value: Record<string, unknown> = {};
+              try {
+                const inputs = liveCard.getAllInputs();
+                for (const input of inputs) {
+                  if (input.id) value[input.id] = input.value;
+                }
+              } catch (e) {
+                setSubmitError('Failed to read form inputs: ' + (e as Error).message);
+                return;
               }
-            } catch (e) {
-              setSubmitError('Failed to read form inputs: ' + (e as Error).message);
-              return;
-            }
-            const convId = readPayload()?.conversationId ?? null;
-            if (!convId) {
-              setSubmitError('No conversation id available for submit. Ask a question first.');
-              return;
-            }
-            if (!host()?.callTool) {
-              setSubmitError('Host bridge does not expose callTool; cannot submit.');
-              return;
-            }
-            setSubmitting(true);
-            try {
-              await host()!.callTool!('submitAdaptiveCardAction', {
-                conversationId: convId,
-                value,
-                actionTitle: action.title ?? '',
-                actionData: action.data ?? {}
-              });
-              // Host re-renders the widget with the new toolOutput. Our
-              // root-level set_globals listener picks it up.
-            } catch (e) {
-              setSubmitError('Submit failed: ' + (e as Error).message);
+              const convId = readPayload()?.conversationId ?? null;
+              if (!convId) {
+                setSubmitError(
+                  'No conversation id available for submit. Ask a question first.'
+                );
+                return;
+              }
+              if (!host()?.callTool) {
+                setSubmitError(
+                  'Host bridge does not expose callTool; cannot submit.'
+                );
+                return;
+              }
+              setSubmitting(true);
+              try {
+                await host()!.callTool!('submitAdaptiveCardAction', {
+                  conversationId: convId,
+                  value,
+                  actionTitle: action.title ?? '',
+                  actionData: action.data ?? {}
+                });
+                // Host re-renders the widget with the new toolOutput.
+                // Our root-level set_globals listener picks it up.
+              } catch (e) {
+                setSubmitError('Submit failed: ' + (e as Error).message);
+              }
             } finally {
               setSubmitting(false);
+              submittingRef.current = false;
             }
           })();
           return;

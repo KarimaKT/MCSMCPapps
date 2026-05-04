@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Widget v2 local test harness</title>
+    <style>
+      body { font-family: 'Segoe UI', sans-serif; max-width: 1200px; margin: 24px auto; padding: 0 24px; }
+      h2 { margin-top: 24px; padding-bottom: 4px; border-bottom: 1px solid #e0e0e0; }
+      .case-row { display: flex; gap: 16px; margin: 12px 0; align-items: flex-start; }
+      .case-meta { width: 200px; flex-shrink: 0; font-size: 13px; color: #555; }
+      .case-meta button { display: block; margin-top: 6px; }
+      iframe {
+        flex-grow: 1;
+        border: 1px solid #d0d0d0;
+        border-radius: 6px;
+        height: 360px;
+        width: 100%;
+      }
+      .controls { margin-bottom: 16px; padding: 8px; background: #f5f5f5; border-radius: 4px; }
+      .log {
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 11px;
+        background: #fafafa;
+        border: 1px solid #eee;
+        padding: 6px 10px;
+        max-height: 180px;
+        overflow: auto;
+        margin: 8px 0 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Widget v2 — local test harness</h1>
+    <p>
+      This page hosts <code>dist-widget-v2/index.widget-v2.html</code> in iframes
+      and stubs <code>window.openai</code> with synthetic <code>toolOutput</code> payloads
+      so we can exercise the rendering paths (markdown, AdaptiveCards, suggested actions,
+      fullscreen, error states) without deploying to App Service or M365 Copilot.
+    </p>
+    <div class="controls">
+      <button id="reload-all">Reload all cases</button>
+      &nbsp;&nbsp;Theme:
+      <label><input type="radio" name="theme" value="light" checked /> light</label>
+      <label><input type="radio" name="theme" value="dark" /> dark</label>
+    </div>
+
+    <div id="cases"></div>
+
+    <script>
+      const CASES = [
+        {
+          id: 'plain-text',
+          title: 'Plain text reply',
+          payload: {
+            replyText: 'Hello — this is a plain text reply with no markdown.',
+            citations: [],
+            chartData: null,
+            adaptiveCards: [],
+            suggestedActions: [],
+            conversationId: 'conv-aaaaaaaa-1111-2222-3333-444444444444',
+            agentDisplayName: 'Eurozone Analyst',
+            diag: { ok: true, csCallMs: 1200, totalMs: 1500 }
+          }
+        },
+        {
+          id: 'markdown',
+          title: 'Markdown rendering (headings, list, table)',
+          payload: {
+            replyText: [
+              '## Italy: Inflation vs. GDP Growth',
+              '',
+              '### Key Data at a Glance',
+              '',
+              '| Year | GDP Growth (YoY) | Inflation Rate (HICP) |',
+              '|---|---|---|',
+              '| 2023 | -0.9% | +5.9% |',
+              '| 2024 | +0.7% | +1.15% (avg) |',
+              '| 2025 | +0.4% (forecast) | +1.7% (avg) |',
+              '',
+              '### Key Takeaways',
+              '',
+              '- **Divergence**: Inflation rebounded sharply in early 2026',
+              '- **Energy dependency**: Italy\'s reliance on imported gas',
+              '- **Real wage squeeze**: Low GDP + rising inflation in 2026',
+              '',
+              '> In summary, Italy faces a challenging combination of weak GDP growth and resurgent inflation in 2026.'
+            ].join('\n'),
+            citations: [
+              { title: 'IMF World Economic Outlook April 2026', url: 'https://www.imf.org/example' },
+              { title: 'Eurostat HICP April 2026', url: 'https://ec.europa.eu/eurostat/example' }
+            ],
+            chartData: null,
+            adaptiveCards: [],
+            suggestedActions: [],
+            conversationId: 'conv-bbbbbbbb-1111-2222-3333-444444444444',
+            agentDisplayName: 'Eurozone Analyst',
+            diag: { ok: true, csCallMs: 2400, totalMs: 2800 }
+          }
+        },
+        {
+          id: 'ac-static-image',
+          title: 'Adaptive Card with image + OpenUrl button',
+          payload: {
+            replyText: 'Here is the latest Italy snapshot:',
+            citations: [],
+            chartData: null,
+            adaptiveCards: [
+              {
+                $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+                type: 'AdaptiveCard',
+                version: '1.5',
+                body: [
+                  { type: 'TextBlock', text: 'Italy Q1 2026', weight: 'Bolder', size: 'Large' },
+                  { type: 'TextBlock', text: 'GDP +0.4%, HICP +2.8%', isSubtle: true },
+                  {
+                    type: 'Image',
+                    url: 'https://flagcdn.com/w320/it.png',
+                    altText: 'Italy flag',
+                    size: 'Medium'
+                  }
+                ],
+                actions: [
+                  { type: 'Action.OpenUrl', title: 'Read full brief', url: 'https://example.com/it' }
+                ]
+              }
+            ],
+            suggestedActions: [],
+            conversationId: 'conv-cccccccc-1111-2222-3333-444444444444',
+            agentDisplayName: 'Eurozone Analyst',
+            diag: { ok: true, csCallMs: 1800, adaptiveCardCount: 1, totalMs: 2100 }
+          }
+        },
+        {
+          id: 'ac-form',
+          title: 'Adaptive Card with form (Input.Text + Submit)',
+          payload: {
+            replyText: 'Please file your claim:',
+            citations: [],
+            chartData: null,
+            adaptiveCards: [
+              {
+                $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+                type: 'AdaptiveCard',
+                version: '1.5',
+                body: [
+                  { type: 'TextBlock', text: 'New claim intake', weight: 'Bolder', size: 'Medium' },
+                  { type: 'Input.Text', id: 'claimType', placeholder: 'Claim type (e.g. medical, dental)' },
+                  { type: 'Input.Date', id: 'incidentDate', label: 'Date of incident' },
+                  {
+                    type: 'Input.ChoiceSet',
+                    id: 'severity',
+                    label: 'Severity',
+                    choices: [
+                      { title: 'Low', value: 'low' },
+                      { title: 'Medium', value: 'medium' },
+                      { title: 'High', value: 'high' }
+                    ]
+                  },
+                  { type: 'Input.Text', id: 'description', isMultiline: true, placeholder: 'Description' }
+                ],
+                actions: [
+                  { type: 'Action.Submit', title: 'Submit claim' }
+                ]
+              }
+            ],
+            suggestedActions: [],
+            conversationId: 'conv-dddddddd-1111-2222-3333-444444444444',
+            agentDisplayName: 'Eurozone Analyst',
+            diag: { ok: true, csCallMs: 1600, adaptiveCardCount: 1, totalMs: 1900 }
+          }
+        },
+        {
+          id: 'suggested-actions',
+          title: 'Suggested actions (quick replies)',
+          payload: {
+            replyText: 'What aspect of the Eurozone economy interests you most?',
+            citations: [],
+            chartData: null,
+            adaptiveCards: [],
+            suggestedActions: [
+              { title: 'Inflation', value: 'tell me about inflation', type: 'imBack' },
+              { title: 'GDP growth', value: 'show me GDP growth', type: 'imBack' },
+              { title: 'Trade balance', value: 'show me trade balance', type: 'imBack' },
+              { title: 'Unemployment', value: 'show me unemployment trends', type: 'imBack' }
+            ],
+            conversationId: 'conv-eeeeeeee-1111-2222-3333-444444444444',
+            agentDisplayName: 'Eurozone Analyst',
+            diag: { ok: true, csCallMs: 900, totalMs: 1100 }
+          }
+        },
+        {
+          id: 'error-state',
+          title: 'Error state (CS unavailable)',
+          payload: {
+            replyText: '',
+            citations: [],
+            chartData: null,
+            adaptiveCards: [],
+            suggestedActions: [],
+            conversationId: null,
+            agentDisplayName: 'Eurozone Analyst',
+            diag: {
+              ok: false,
+              step: 'cs',
+              error: 'CS stream timed out before reply',
+              csCallMs: 30005,
+              activityCount: 11,
+              totalMs: 30100
+            }
+          }
+        },
+        {
+          id: 'multi-card-carousel',
+          title: 'Multi-card carousel (2 cards in one reply)',
+          payload: {
+            replyText: 'Top movers this week:',
+            citations: [],
+            chartData: null,
+            adaptiveCards: [
+              {
+                type: 'AdaptiveCard', version: '1.5',
+                body: [
+                  { type: 'TextBlock', text: 'EUR/USD', weight: 'Bolder' },
+                  { type: 'TextBlock', text: '1.0842', size: 'Large', color: 'Good' },
+                  { type: 'TextBlock', text: '+0.6% WoW', isSubtle: true }
+                ]
+              },
+              {
+                type: 'AdaptiveCard', version: '1.5',
+                body: [
+                  { type: 'TextBlock', text: 'BUND 10Y', weight: 'Bolder' },
+                  { type: 'TextBlock', text: '2.41%', size: 'Large', color: 'Attention' },
+                  { type: 'TextBlock', text: '+12 bp WoW', isSubtle: true }
+                ]
+              }
+            ],
+            suggestedActions: [],
+            conversationId: 'conv-ffffffff-1111-2222-3333-444444444444',
+            agentDisplayName: 'Eurozone Analyst',
+            diag: { ok: true, adaptiveCardCount: 2 }
+          }
+        }
+      ];
+
+      function selectedTheme() {
+        const r = document.querySelector('input[name="theme"]:checked');
+        return r ? r.value : 'light';
+      }
+
+      function makeIframeSrcdoc(payload, theme) {
+        // Inline the widget HTML and pre-stub window.openai before the
+        // bundled script runs. This is what M365 Copilot does in
+        // production, just synthetic.
+        const stub = `
+          <script>
+            (function () {
+              var listeners = [];
+              window.openai = {
+                toolOutput: ${JSON.stringify(payload)},
+                toolInput: { userQuery: 'test harness query' },
+                theme: '${theme}',
+                displayMode: 'inline',
+                notifyIntrinsicHeight: function (h) { /* parent could resize */ },
+                requestDisplayMode: function (req) {
+                  document.documentElement.setAttribute('data-display', req.mode);
+                  window.openai.displayMode = req.mode;
+                  var ev = new Event('openai:set_globals');
+                  window.dispatchEvent(ev);
+                },
+                openExternal: function (req) {
+                  console.log('[harness] openExternal', req.href);
+                  alert('openExternal: ' + req.href);
+                },
+                callTool: function (name, args) {
+                  console.log('[harness] callTool', name, args);
+                  return new Promise(function (resolve) { setTimeout(function () { resolve({ ok: true }); }, 800); });
+                }
+              };
+            })();
+          </script>
+        `;
+        // Fetch the built widget HTML and inject the stub before the
+        // bundled inline script. Since the build is single-file, the
+        // simplest approach is to use srcdoc with a placeholder. But
+        // srcdoc has length limits — instead, use sandbox + iframe src
+        // to a Blob URL.
+        return null; // unused
+      }
+
+      async function fetchWidgetHtml() {
+        const resp = await fetch('../webchat-ui/dist-widget-v2/index.widget-v2.html');
+        if (!resp.ok) throw new Error('fetch widget html failed: ' + resp.status);
+        return await resp.text();
+      }
+
+      async function renderCase(host, kase, theme) {
+        host.innerHTML = '';
+        const meta = document.createElement('div');
+        meta.className = 'case-meta';
+        meta.innerHTML = '<strong>' + kase.title + '</strong><br><small>id: ' + kase.id + '</small>';
+        const reload = document.createElement('button');
+        reload.textContent = 'Reload';
+        reload.onclick = () => renderCase(host, kase, selectedTheme());
+        meta.appendChild(reload);
+        const fs = document.createElement('button');
+        fs.textContent = 'Toggle fullscreen';
+        meta.appendChild(fs);
+
+        const iframe = document.createElement('iframe');
+        iframe.title = kase.title;
+        iframe.sandbox.add('allow-scripts');
+        // We do not allow same-origin to keep the iframe a null origin —
+        // matches the skybridge sandbox behavior.
+
+        const widgetHtml = await fetchWidgetHtml();
+        const stubBefore =
+          '<script>(function(){window.openai={toolOutput:' +
+          JSON.stringify(kase.payload).replace(/<\/script>/gi, '<\\/script>') +
+          ',toolInput:{userQuery:"harness"},theme:"' + theme + '",displayMode:"inline",' +
+          'notifyIntrinsicHeight:function(h){},' +
+          'requestDisplayMode:function(req){document.documentElement.setAttribute("data-display",req.mode);window.openai.displayMode=req.mode;window.dispatchEvent(new Event("openai:set_globals"));},' +
+          'openExternal:function(req){alert("openExternal: "+req.href);},' +
+          'callTool:function(name,args){console.log("[harness] callTool",name,args);return new Promise(function(r){setTimeout(function(){r({ok:true});},800);});}' +
+          '};})();<\/script>';
+        const injected = widgetHtml.replace(/<head>/i, '<head>' + stubBefore);
+        iframe.srcdoc = injected;
+
+        fs.onclick = () => {
+          const doc = iframe.contentDocument;
+          if (!doc) return;
+          const cur = doc.documentElement.getAttribute('data-display') || 'inline';
+          const next = cur === 'fullscreen' ? 'inline' : 'fullscreen';
+          doc.documentElement.setAttribute('data-display', next);
+          if (iframe.contentWindow && iframe.contentWindow.openai) {
+            iframe.contentWindow.openai.displayMode = next;
+            iframe.contentWindow.dispatchEvent(new Event('openai:set_globals'));
+          }
+        };
+
+        host.appendChild(meta);
+        host.appendChild(iframe);
+      }
+
+      function build() {
+        const root = document.getElementById('cases');
+        root.innerHTML = '';
+        const theme = selectedTheme();
+        for (const kase of CASES) {
+          const wrap = document.createElement('div');
+          wrap.className = 'case-row';
+          root.appendChild(wrap);
+          renderCase(wrap, kase, theme).catch((e) => {
+            wrap.innerHTML = '<pre>' + (e && e.message) + '</pre>';
+          });
+        }
+      }
+
+      document.getElementById('reload-all').onclick = build;
+      document.querySelectorAll('input[name="theme"]').forEach((r) => r.addEventListener('change', build));
+      build();
+    </script>
+  </body>
+</html>
