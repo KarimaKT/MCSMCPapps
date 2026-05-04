@@ -471,6 +471,16 @@ function App() {
   const [displayMode, setDisplayMode] = useState<'inline' | 'fullscreen'>(() =>
     host()?.displayMode === 'fullscreen' ? 'fullscreen' : 'inline'
   );
+  // Wall-clock seconds since the widget mounted. Used by the
+  // pending-state placeholder to give a "still thinking" hint when CS
+  // takes a while (legitimate topics with tool calls / generative
+  // answers can run 60-120 s; the server cap is 180 s).
+  const [elapsedSec, setElapsedSec] = useState(0);
+  useEffect(() => {
+    if (payload) return; // stop ticking once the answer arrives
+    const t = setInterval(() => setElapsedSec((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [payload]);
 
   // Watch for late toolOutput delivery (host may mount the iframe before
   // the tool result is ready).
@@ -554,7 +564,26 @@ function App() {
 
   if (!payload) {
     const userQuery = host()?.toolInput?.userQuery;
-    return <div className="mcs-pending">Loading{userQuery ? ' “' + userQuery + '”' : ''}…</div>;
+    // Progressive hints. CS topics with tool calls / generative answers
+    // can run ~60-120s; the server backstop is 180s. We don't have
+    // streaming progress yet (FR 5.1), so we rotate the hint text by
+    // elapsed time to reassure the user something is happening.
+    let hint = 'Reading your question';
+    if (elapsedSec >= 5) hint = 'Asking the analyst';
+    if (elapsedSec >= 12) hint = 'Looking up sources';
+    if (elapsedSec >= 25) hint = 'Composing the answer';
+    if (elapsedSec >= 60) hint = 'Still working — complex topics can take a minute or two';
+    if (elapsedSec >= 120) hint = 'Almost there';
+    return (
+      <div className="mcs-pending" aria-live="polite">
+        <div>{hint}{userQuery ? ' \u201C' + userQuery + '\u201D' : ''}\u2026</div>
+        {elapsedSec >= 8 ? (
+          <div style={{ marginTop: 6, fontSize: 11, color: 'var(--muted, #5b5d62)', fontVariantNumeric: 'tabular-nums' }}>
+            {elapsedSec}s elapsed
+          </div>
+        ) : null}
+      </div>
+    );
   }
 
   const ok = payload.diag?.ok !== false && (payload.replyText.length > 0 || (payload.adaptiveCards?.length ?? 0) > 0);

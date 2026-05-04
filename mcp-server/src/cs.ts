@@ -67,8 +67,17 @@ export interface CallCsAgentParams {
   /** Power Platform cloud. Defaults to Prod. */
   cloud?: PowerPlatformCloud;
   /**
-   * Hard cap on the entire CS interaction (open + send + drain). Backstop
-   * only — normal turns end via EndOfConversation in <5s. Default 30s.
+   * Hard cap on the entire CS interaction (open + send + drain).
+   *
+   * Backstop only — the loop normally exits when CS sends an
+   * `ActivityTypes.EndOfConversation`. We only hit this cap when CS
+   * never signals end-of-turn (e.g. genuine bug, or extremely
+   * long-running topic with no termination).
+   *
+   * Default 180 s (3 minutes). CS topics that do tool calls, agent
+   * flows, or generative answers against large knowledge sources
+   * routinely take 60-120 s; 30s was cutting them off mid-flight.
+   * App Service Linux idle timeout is ~230 s, so 180 s leaves margin.
    */
   hardTimeoutMs?: number;
 }
@@ -134,7 +143,7 @@ export interface CallCsAgentResult {
   };
 }
 
-const DEFAULT_HARD_TIMEOUT_MS = 30_000;
+const DEFAULT_HARD_TIMEOUT_MS = 180_000;
 
 /**
  * Wrap an async iterable with a hard total-time timeout. Backstop only.
