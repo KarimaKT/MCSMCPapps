@@ -33,6 +33,8 @@ Open [`docs/MAKER-CONFIG.md`](MAKER-CONFIG.md) for the full list. The minimum:
 | `BRAND_ACCENT_COLOR` | Hex; matches your company brand | `#003399` |
 | `BRAND_LOGO_TEXT` | Single character for the avatar | `A` |
 
+> **Don't host the agent in the Default environment for production.** Default has no DLP boundary, no governance scoping, and per-user-owned agents in Default don't appear in tenant-admin maker views. They still *run* (the OBO flow uses the end user's identity, so callers can invoke the agent regardless), but admins lose oversight, and connectors authored by one user aren't visible to others. Use a named environment (Dev / Test / Prod) — see [Microsoft's environment strategy guidance](https://learn.microsoft.com/en-us/power-platform/admin/environment-strategy).
+
 ## Step 3 — Run the brand-swap script (~2 min)
 
 ```pwsh
