@@ -29,6 +29,14 @@ on an updated app package (manifest version bumped, e.g. `1.0.4 → 1.0.5`), the
 The maker has no reliable way to confirm "my update is queued and waiting for admin action,"
 nor to see what version is currently live vs pending.
 
+**Update 2026-05-03 — partial finding.** The pending-update surface DOES exist, but it is
+in **Microsoft 365 admin center → All agents → Requests tab** (URL pattern
+`https://admin.cloud.microsoft/?#/agents/all/requested`). This is a brand-new "All agents"
+experience that replaces some of the old Integrated Apps pending-update flow. It is **not**
+in the Teams Admin Center, **not** in Integrated apps "Requests", and **not** linked from
+the Agent Registry side panel for the agent. Discovery cost from a fresh admin: 15+ minutes
+of clicking around three different admin centers.
+
 **Repro.**
 
 1. Publish v1.0.X via Agents Toolkit. Approve it. Confirm it is live in M365 Copilot.
@@ -37,6 +45,9 @@ nor to see what version is currently live vs pending.
 4. Observe: only one row appears, showing the *old* version. No "Update pending" badge or filter.
 5. Open M365 Copilot Agent Store. Observe the Update button is *sometimes* present, *sometimes*
    not, depending on cache state and time since publish. There is no admin-side equivalent.
+6. The actual pending-update entry is at `https://admin.cloud.microsoft/?#/agents/all/requested`
+   (Microsoft 365 admin center → All agents → Requests). Side panel doesn't link there from
+   the agent's Registry entry.
 
 **Ask.**
 
@@ -46,6 +57,11 @@ nor to see what version is currently live vs pending.
   ISVs and platform teams can subscribe to.
 - Make the M365 Copilot Agent Store consistently surface the **Update** button immediately,
   not after a soft cache flip.
+- **Cross-link the surfaces.** From the All agents → Registry side panel of an agent that
+  has a pending update, show a banner "Pending update v1.X.Y → review in Requests" that
+  deep-links to the Requests row. From Teams Admin Center → Manage apps → the agent's row,
+  same banner. From the maker's `teamsapp publish` CLI output, print the deep link to the
+  Requests tab so the admin and maker have one clickable URL to share.
 
 **Why it matters.** Customer admins cannot give makers timely feedback. Makers can't run a
 deployment pipeline that says "publish → wait for admin approval → notify maker → run smoke tests"
@@ -291,6 +307,65 @@ plain markdown, with no way to predict which.
 **Workaround.** Make tool descriptions long, specific, and exhaustive (full list of
 capabilities). Make DA instructions naturally state "This agent's only knowledge is what
 the [tool name] tool returns." Even with both, routing is ~70-80% reliable, not 100%.
+
+---
+
+### 2.7 No "silent dispatcher" toggle: host model always narrates after a tool call
+
+**Pain.** Copilot Studio gives the maker a per-tool/per-topic toggle: "Should the agent
+respond after this tool runs?" That control is **missing** for declarative agents. After a
+tool call returns, M365 Copilot's host model **always** generates a follow-up text
+response, even when the tool's `structuredContent` is the entire intended answer (e.g. a
+data-widget that already shows the chart, the table, the citations).
+
+The host's follow-up commentary frequently:
+
+- **Repeats** content the widget already shows ("Italy's CPI is 1.2%, here is the table…")
+- **Hedges** unnecessarily ("I can't reliably chart this from the numbers shown…")
+- **Hallucinates** caveats not in the tool output ("This data may be outdated, but…")
+- **Truncates or misquotes** the widget's authoritative payload
+
+The MS UX guidelines for widgets explicitly say "don't duplicate content between widget and
+model text." But the platform forces makers to fight the host model into silence via
+prompt-engineered DA instructions, which is unreliable.
+
+The closest existing knob is the plugin-manifest 2.4 `states.responding.instructions` field
+on a function. That tunes the model's response style but does NOT let the maker disable
+the response. Plugin manifest 2.4 also has `states.responding.instructions: ""` (empty
+string), but the model still narrates — empty instructions falls back to default behavior.
+
+**Repro.**
+
+1. Build a DA with one MCP-server-backed tool that returns rich `structuredContent`
+   suitable for a widget.
+2. DA `instructions` say "Always call the tool. Never answer from your own knowledge.
+   Never narrate."
+3. User asks a question. Tool returns. Widget renders.
+4. **Observe**: a paragraph of host-model text appears next to the widget commenting on
+   the data, sometimes contradicting it, sometimes hedging.
+
+**Ask.** At least one of:
+
+1. **DA-level field** `behavior_overrides.suppress_post_tool_response: true` — when set,
+   the host model emits zero tokens after a successful tool call; the widget's
+   `structuredContent` IS the entire turn.
+2. **Per-function field** `capabilities.response_semantics.mode: "widget_only"` (or
+   similar) — same effect, scoped to a single tool. Lets makers mix narrating tools and
+   silent-dispatcher tools in one DA.
+3. **Per-call signal in the tool response** `_meta["openai/suppressResponse"]: true` —
+   highest fidelity; the server decides per call whether the host should narrate.
+4. Mirror the Copilot Studio UI toggle 1:1: DA designers pick "Respond after tool" /
+   "Don't respond" per action, like CS makers can today.
+
+**Why it matters.** This is the single largest source of "weird two-headed reply" UX in
+M365 Copilot data widgets. Without it, every widget-style DA either has a verbose host
+narration that competes with the widget, or relies on prompt-magic in DA `instructions`
+that breaks with model updates. The toggle exists in CS — declarative agents need parity.
+
+**Workaround.** None reliable. We make the tool's `content[0].text` empty or whitespace
+to give the host nothing to riff on, but the host LLM often invents commentary anyway
+based on `structuredContent`. We tighten DA `instructions` to "be silent after tool
+calls" — works ~60% of the time. CS Copilot Studio doesn't have this gap.
 
 ---
 

@@ -61,24 +61,11 @@ export function buildToolMeta(
   };
 }
 
-/**
- * Generate a short summary line for the host's chat transcript from CS's
- * full reply. The host displays this as the model's reply text alongside
- * the widget card. Per MS UX guidelines, the widget card and the reply
- * line should NOT duplicate content — keep the line short.
- *
- * Strategy: take the first sentence (or first 200 chars) of CS's reply.
- * If CS produced no reply, surface a helpful message.
- */
-function summarize(replyText: string, agentName: string): string {
-  if (!replyText) {
-    return `${agentName} couldn\u2019t answer that.`;
-  }
-  const firstSentence = replyText.match(/^[^.!?\n]*[.!?]/);
-  const summary = (firstSentence ? firstSentence[0] : replyText).trim();
-  if (summary.length <= 220) return summary;
-  return summary.slice(0, 220).replace(/\s+\S*$/, '') + '\u2026';
-}
+// `summarize()` was used to populate `content[0].text` with the first
+// sentence of CS's reply. Removed in v0.6.3 — we now return empty text
+// to discourage host-model narration (silent-dispatcher workaround for
+// FR 2.7). When CS errors, we surface the error in `structuredContent.diag`
+// and the widget renders an error card.
 
 export function registerOpenCopilotStudioChatTool(
   server: McpServer,
@@ -150,7 +137,7 @@ export function registerOpenCopilotStudioChatTool(
           content: [
             {
               type: 'text',
-              text: `${config.agentName} couldn\u2019t reach Copilot Studio (auth not configured).`
+              text: ''
             }
           ],
           structuredContent: {
@@ -180,7 +167,7 @@ export function registerOpenCopilotStudioChatTool(
           content: [
             {
               type: 'text',
-              text: `${config.agentName} couldn\u2019t obtain a Power Platform token.`
+              text: ''
             }
           ],
           structuredContent: {
@@ -211,10 +198,21 @@ export function registerOpenCopilotStudioChatTool(
         `[tool] CS call done: ok=${cs.diag.ok} ms=${cs.diag.csCallMs} activities=${cs.diag.activityCount} replyLen=${cs.replyText.length}${cs.diag.error ? ' error=' + cs.diag.error : ''}`
       );
 
-      const summary = summarize(cs.replyText, config.agentName);
-
+      // Silent-dispatcher pattern. The widget displays the reply via
+      // `structuredContent`; we don't want the host model to narrate or
+      // duplicate the widget's content. Per FR 2.7, declarative agents
+      // lack a 'suppress post-tool response' toggle (the parity gap with
+      // Copilot Studio). Best workaround today is to return an empty
+      // text content so the host has nothing to riff on, plus DA
+      // instructions that tell the model to stay silent.
+      //
+      // Returning empty text DOES NOT skip the host response phase, but
+      // it removes the most common trigger for the host to invent
+      // commentary. Combined with the tightened DA instructions, this
+      // gets us to ~70-80% silent. True silence requires the platform
+      // feature in FR 2.7.
       return {
-        content: [{ type: 'text', text: summary }],
+        content: [{ type: 'text', text: '' }],
         // structuredContent flows through the host verbatim into
         // window.openai.toolOutput.structuredContent — this is the
         // reliable channel to the widget. _meta is host-consumed and

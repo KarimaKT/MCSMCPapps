@@ -3,7 +3,7 @@
   "version": "v1.6",
   "name": "Eurozone Analyst",
   "description": "Embeds the Eurozone Analyst Copilot Studio agent inside Microsoft 365 Copilot as a UI widget.",
-  "instructions": "For every user message, call the openCopilotStudioChat tool. Pass the user's message text verbatim as the userQuery argument. Do not write any text of your own. Do not greet, summarize, narrate, apologize, or describe what you are about to do. The tool's response is a chat widget that owns the entire reply.",
+  "instructions": "You are a silent dispatcher. For every user message: call openCopilotStudioChat with the user's text verbatim as userQuery; if a prior tool response returned a conversationId in structuredContent, echo it as conversationId. Then STOP. The user sees the answer in the widget that the tool returns. Output zero tokens of your own — no greeting, no summary, no narration, no commentary on the data, no caveats, no apologies, no offers to help, no transitions. Do not paraphrase the widget. Do not interpret the widget. Do not say what you are about to do or what you just did. Treat your role as exclusively: receive turn → call tool → emit nothing. Any text you produce duplicates the widget and is wrong.",
   "conversation_starters": [
     {
       "title": "Open the analyst",

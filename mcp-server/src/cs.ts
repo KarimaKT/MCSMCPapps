@@ -275,48 +275,27 @@ export async function callCsAgent(
       sawEndOfConversation: false
     };
 
-    // Step 1 (only if no conversation id): open a new conversation.
-    // The MS sample passes `true` to startConversationStreaming meaning
-    // "emit start conversation event" — we do the same. The greeting
-    // turn ends with EndOfConversation, so consumeTurn returns cleanly.
-    if (!params.conversationId) {
-      const startedAt = Date.now();
-      // eslint-disable-next-line no-console
-      console.log('[cs] startConversationStreaming(true)');
-      const startStream = client.startConversationStreaming(
-        true
-      ) as AsyncIterable<Activity>;
-      const startState: TurnState = {
-        ...state,
-        replyParts: [] // discard greeting text; not the answer
-      };
-      await consumeTurn(
-        startStream,
-        startState,
-        Math.max(2000, hardTimeoutMs - (Date.now() - start)),
-        () => {
-          result.diag.timedOut = true;
-        }
-      );
-      state.conversationId = startState.conversationId;
-      state.activityCount += startState.activityCount;
-      // eslint-disable-next-line no-console
-      console.log(
-        `[cs] startConversation done in ${Date.now() - startedAt}ms; convId=${state.conversationId ? String(state.conversationId).slice(0, 12) + '\u2026' : 'NONE'}; eoc=${startState.sawEndOfConversation}`
-      );
-      if (!state.conversationId) {
-        result.diag.csCallMs = Date.now() - start;
-        result.diag.activityCount = state.activityCount;
-        result.diag.ok = false;
-        result.diag.error =
-          'CS startConversation returned no conversation id' +
-          (result.diag.timedOut ? ' (hard timeout)' : '');
-        return result;
-      }
-    }
+    // Step 1 — REMOVED in v0.6.3.
+    //
+    // We used to call `startConversationStreaming(true)` first to open
+    // a new CS conversation, drain the greeting activities, and capture
+    // the conversation id. That was modeled after the MS console-chat
+    // sample, where you want to print the greeting. For our use case
+    // (user already typed a question; we just want CS's reply), it's
+    // a wasted round trip — adds ~3-30s of cold-path latency without
+    // any user-visible benefit.
+    //
+    // The CS Direct Engine `sendActivityStreaming(activity)` SDK call
+    // creates the conversation server-side on the first invocation
+    // when the activity has no `conversation.id`. CS's "On Conversation
+    // Start" topic still fires (it's CS-side, triggered by conversation
+    // creation regardless of which API opened it). So we just send the
+    // user's question directly and pick up the conversation id from
+    // the streaming reply's first activity.
 
-    // Step 2: send the user's activity and consume the streaming reply
-    // until EndOfConversation.
+    // Send the user's activity and consume the streaming reply until
+    // EndOfConversation. If we have no `conversationId` from a prior
+    // tool call, the SDK creates the conversation as part of this call.
     const sendStartedAt = Date.now();
     // eslint-disable-next-line no-console
     console.log(
