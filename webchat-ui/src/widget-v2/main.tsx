@@ -270,6 +270,160 @@ function ErrorState({ payload }: { payload: ToolPayload }) {
 }
 
 /**
+ * Live-agent escalation banner. v0.7.3+. Shown when CS has emitted a
+ * Handoff (or text matching a hand-off hint) and the user is now in
+ * the live-agent queue.
+ *
+ * # Why this exists
+ *
+ * The M365 Copilot host has a ~2 min hard ceiling on any single tool
+ * call. A live agent who replies in 10 minutes can't be served by the
+ * original turn — that turn ends well before the agent types. The
+ * MCP App contract has no server→widget push channel today (filed as
+ * FR 5.1, streaming `tools/call`).
+ *
+ * Workaround: tell the user the truth, then give them a one-click
+ * "Check for reply" button that fires a fresh, short tool call which
+ * surfaces whatever messages CS has queued. Each click also refreshes
+ * the per-thread conversation cache, keeping the CS conversation alive
+ * past the 25-min idle TTL as long as the user pings periodically.
+ *
+ * Auto-check is INTENTIONALLY off by default. Each poll costs a
+ * host-LLM round trip (~1.5-3 s + token cost), so we let the user
+ * opt in if they want the convenience.
+ */
+function EscalationBanner({
+  agentName,
+  conversationId
+}: {
+  agentName: string;
+  conversationId: string | null;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [lastCheckedAt, setLastCheckedAt] = useState<number | null>(null);
+  const [autoCheck, setAutoCheck] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const sendPing = React.useCallback(async () => {
+    if (busy) return;
+    if (!host()?.callTool) {
+      setError('Host bridge does not expose callTool; cannot check.');
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      // Magic ping payload. The server detects this exact userQuery
+      // and posts a benign Activity to CS so any queued live-agent
+      // messages flush. CS will respond with whatever the live agent
+      // has typed since the last turn (or a still-in-queue message).
+      await host()!.callTool!('openCopilotStudioChat', {
+        userQuery: '__mcsmcpapps_check_for_updates__',
+        conversationId: conversationId ?? ''
+      });
+      setLastCheckedAt(Date.now());
+      // Host re-renders the widget with the new toolOutput; our
+      // App-level set_globals listener picks it up.
+    } catch (e) {
+      setError('Check failed: ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, conversationId]);
+
+  // Auto-check timer. OFF BY DEFAULT; opt-in via the toggle. Polls
+  // every 30 s while enabled. Stops when the toggle flips off or
+  // the component unmounts.
+  useEffect(() => {
+    if (!autoCheck) return;
+    const t = setInterval(() => {
+      sendPing().catch(() => undefined);
+    }, 30_000);
+    return () => clearInterval(t);
+  }, [autoCheck, sendPing]);
+
+  const lastChecked = lastCheckedAt
+    ? Math.max(0, Math.round((Date.now() - lastCheckedAt) / 1000))
+    : null;
+
+  return (
+    <div
+      className="mcs-escalation"
+      role="status"
+      aria-live="polite"
+      style={{
+        marginTop: 12,
+        padding: 12,
+        border: '1px solid var(--card-border, #e0e0e0)',
+        borderLeft: '3px solid #f0a020',
+        borderRadius: 6,
+        background: 'var(--hover, #fff8e6)',
+        fontSize: 13
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>
+        Waiting for {agentName}
+      </div>
+      <div style={{ color: 'var(--muted, #5b5d62)', marginBottom: 10, lineHeight: 1.5 }}>
+        A person will reply here when available. Replies don\u2019t arrive
+        automatically \u2014 stay in this chat and check periodically. Each
+        check refreshes the conversation; if you walk away for more than
+        about 25 minutes, you\u2019ll need to start over.
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          flexWrap: 'wrap'
+        }}
+      >
+        <button
+          className="mcs-btn primary"
+          onClick={sendPing}
+          disabled={busy}
+          style={{ fontSize: 13 }}
+        >
+          {busy ? 'Checking\u2026' : 'Check for reply'}
+        </button>
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 12,
+            color: 'var(--muted, #5b5d62)'
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={autoCheck}
+            onChange={(e) => setAutoCheck(e.target.checked)}
+          />
+          Auto-check every 30 s
+        </label>
+        {lastChecked !== null ? (
+          <span style={{ fontSize: 11, color: 'var(--muted, #5b5d62)' }}>
+            Last checked {lastChecked === 0 ? 'just now' : `${lastChecked}s ago`}
+          </span>
+        ) : null}
+      </div>
+      {error ? (
+        <div
+          style={{
+            marginTop: 8,
+            fontSize: 12,
+            color: 'var(--negative, #c50f1f)'
+          }}
+        >
+          {error}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * Render an Adaptive Card from CS into a DOM node. Per spec 0002 + ADR 0004:
  *  - We trust CS's JSON (no client-side schema validation)
  *  - Action.OpenUrl → `window.openai.openExternal`
@@ -686,6 +840,12 @@ function App() {
         <div className="mcs-preview-meta">Open the analyst to read the full answer.</div>
       ) : null}
       <CitationsList items={payload.citations ?? []} />
+      {payload.escalation === 'waiting' || payload.escalation === 'connected' ? (
+        <EscalationBanner
+          agentName={payload.agentDisplayName}
+          conversationId={payload.conversationId}
+        />
+      ) : null}
       <SuggestedActionsRow
         actions={payload.suggestedActions ?? []}
         conversationId={payload.conversationId}

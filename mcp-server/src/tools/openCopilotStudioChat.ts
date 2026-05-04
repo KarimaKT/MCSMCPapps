@@ -84,36 +84,17 @@ export function registerOpenCopilotStudioChatTool(
     'openCopilotStudioChat',
     {
       title: config.agentName,
-      description:
-        `Sends the user\u2019s message to the ${config.agentName} ` +
-        'Copilot Studio agent and returns the agent\u2019s reply as a ' +
-        'rendered widget. Call this for every user turn including the ' +
-        'first. **CRITICAL multi-turn rule:** every tool response\u2019s ' +
-        '`structuredContent.conversationId` MUST be passed back as the ' +
-        '`conversationId` argument on the very next tool call (and on ' +
-        'every subsequent call) so the agent keeps topic state, ' +
-        'memory, and follow-up context. Do NOT omit `conversationId` ' +
-        'on follow-ups \u2014 omitting it starts a brand-new conversation ' +
-        'and loses all prior context. Pass `userQuery` exactly as the ' +
-        'user typed it, with no summarization, paraphrase, or ' +
-        'translation.',
+      description: `Sends the user's message to ${config.agentName} and returns the reply as a rendered widget. Call this for every user message.`,
       inputSchema: {
         userQuery: z
           .string()
           .min(1)
-          .describe(
-            'The user\u2019s exact text. Passed verbatim to the ' +
-              'Copilot Studio agent. Do not paraphrase or translate.'
-          ),
+          .describe('The user\u2019s exact message text.'),
         conversationId: z
           .string()
+          .optional()
           .describe(
-            'Echo of `structuredContent.conversationId` from the ' +
-              'prior tool response. Pass an empty string ("") on the ' +
-              'very first call of a brand-new conversation. ' +
-              'On every subsequent call, pass the exact value the ' +
-              'last response returned \u2014 omitting it discards CS ' +
-              'topic state and is almost always wrong.'
+            'Echo from the previous tool response\u2019s conversationId. Omit on the first call.'
           )
       },
       annotations: {
