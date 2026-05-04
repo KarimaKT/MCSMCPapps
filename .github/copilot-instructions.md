@@ -20,6 +20,14 @@ Every architecture decision (good or bad, one-shot or pivot) gets a short ADR un
 
 When designing against an external platform (M365 Copilot, MCP, Entra, etc.) — cite the source you read. Inline the URL in the spec. If you didn't actually read it, say "needs to verify" instead of guessing the JSON shape. See `/memories/code-review-discipline.md`.
 
+## Read official samples BEFORE writing SDK / platform code
+
+For any Microsoft Agents SDK call (`@microsoft/agents-copilotstudio-client`, `@microsoft/agents-activity`, MCP-Apps, declarative agents): open the matching sample in `github.com/microsoft/Agents/samples` or `github.com/microsoft/mcp-interactiveUI-samples` end-to-end FIRST. Find the canonical exit signal, contract shape, error semantics. Don't invent a drain loop / timeout / signal that the sample already shows.
+
+Concrete past mistake: hand-rolled CS streaming drain with idle timeouts. The MS sample shows `if (activity.type === ActivityTypes.EndOfConversation) break` — five seconds of reading saved hours of debug. Sample-first applies to SDK calls, _meta keys, manifest fields, anywhere the platform has an opinion.
+
+If no sample matches your case, mark "needs to verify" in the spec.
+
 ## Branching
 
 - `main` — only ever has working, reviewed code

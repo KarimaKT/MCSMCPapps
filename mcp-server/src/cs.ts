@@ -1,60 +1,48 @@
 /**
  * Copilot Studio Direct Engine call from Node (server-side).
  *
+ * This module follows the canonical pattern in Microsoft's official
+ * sample: github.com/microsoft/Agents/blob/main/samples/nodejs/
+ * copilotstudio-client/src/index.ts
+ *
+ * Key insights from the sample (we got these wrong on first pass):
+ *   - CS Direct Engine streams emit an explicit
+ *     `ActivityTypes.EndOfConversation` activity at end of turn.
+ *     That's the documented exit signal for a streaming loop, not
+ *     "stream closed" and not "idle for N ms."
+ *   - The streams end naturally per turn. No artificial timeouts
+ *     needed in normal operation.
+ *   - `startConversationStreaming(true)` passes `emitStartConversationEvent`.
+ *
  * Used by the `openCopilotStudioChat` tool to:
- *   1. Open (or resume) a CS conversation using the OBO'd Power Platform
- *      token of the actual user
+ *   1. Open (or resume) a CS conversation using the OBO'd PP token
  *   2. Send the user's question
- *   3. Drain the streaming activity response to completion
+ *   3. Iterate the streaming reply until EndOfConversation
  *   4. Collect: full reply text, citations, optional chart payload
- *   5. Return as a synchronous structured response to the tool caller
+ *   5. Return as a synchronous structured response
  *
- * # Why server-side and not browser-side
+ * # Why server-side
  *
- * Per ADR 0001, the M365 Copilot widget surface is a data-display card,
- * not a chat surface. The widget receives `structuredContent` from the
- * tool response and renders it; it does not maintain a CS conversation.
- * This keeps the widget bundle tiny and avoids MSAL inside the skybridge
- * sandbox (which can never succeed — see ADR 0001).
+ * Per ADR 0001, the M365 Copilot widget is a data-display card, not a
+ * chat surface. The widget receives `structuredContent` from the tool
+ * response and renders it; it does not maintain a CS conversation.
  *
  * # Conversation continuity
  *
- * Each tool call returns the CS `conversationId` in `structuredContent`.
- * The host echoes it on subsequent tool calls via the `conversationId`
- * field of the tool's `inputSchema`. That keeps CS topic-state alive
- * across user turns without our infra storing anything.
- *
- * # Drain timeout
- *
- * If CS streams for >10 seconds, we cut off and return what we have.
- * Mark `diag.timedOut = true` so the caller / widget can show a hint.
+ * Each tool call returns the CS `conversationId`. The host echoes it
+ * on subsequent tool calls via the tool's `inputSchema.conversationId`,
+ * keeping CS topic-state alive without our infra storing anything.
  */
 
+import { Activity, ActivityTypes } from '@microsoft/agents-activity';
 import {
   CopilotStudioClient,
   PowerPlatformCloud,
   type ConnectionSettings
 } from '@microsoft/agents-copilotstudio-client';
 
-/** Activity-shape we care about (a thin slice of the BotFramework Activity). */
-interface CsActivity {
-  type?: string;
-  text?: string;
-  attachments?: Array<{
-    contentType?: string;
-    content?: unknown;
-    contentUrl?: string;
-    name?: string;
-  }>;
-  entities?: Array<{
-    type?: string;
-    [key: string]: unknown;
-  }>;
-  conversation?: { id?: string };
-}
-
 export interface CallCsAgentParams {
-  /** Power Platform environment GUID (e.g. `61453fde-...`). */
+  /** Power Platform environment GUID. */
   envId: string;
   /** Agent schema name (e.g. `ksteam_ak001`). */
   schema: string;
@@ -63,15 +51,18 @@ export interface CallCsAgentParams {
   /** User's question, passed verbatim. */
   userQuery: string;
   /**
-   * Optional CS conversation id from a previous tool call.
-   * Echo this from `structuredContent.conversationId` of the prior call
-   * to keep CS topic-state alive across user turns.
+   * Optional CS conversation id from a prior tool call. Echo this from
+   * `structuredContent.conversationId` to keep CS topic-state alive
+   * across user turns.
    */
   conversationId?: string;
   /** Power Platform cloud. Defaults to Prod. */
   cloud?: PowerPlatformCloud;
-  /** Drain timeout in ms. Default 10_000. */
-  timeoutMs?: number;
+  /**
+   * Hard cap on the entire CS interaction (open + send + drain). Backstop
+   * only — normal turns end via EndOfConversation in <5s. Default 30s.
+   */
+  hardTimeoutMs?: number;
 }
 
 export interface Citation {
@@ -79,11 +70,6 @@ export interface Citation {
   url: string;
 }
 
-/**
- * Optional chart payload. CS can emit these via Power Automate as
- * adaptive cards or custom attachments. We extract a normalized shape
- * so the widget renders consistently.
- */
 export interface ChartData {
   kind: 'stat' | 'compare' | 'trend';
   title?: string;
@@ -93,51 +79,34 @@ export interface ChartData {
 }
 
 export interface CallCsAgentResult {
-  /** Full reply text (markdown supported). */
   replyText: string;
-  /** Citations extracted from activity entities + attachments. */
   citations: Citation[];
-  /** Normalized chart payload, if CS sent one. */
   chartData: ChartData | null;
-  /** CS conversation id. Echo to next tool call to maintain context. */
   conversationId: string | null;
-  /** Diagnostic counters. Surfaced in tool response for in-widget debug. */
   diag: {
-    /** Wall-clock duration of the CS call in ms. */
     csCallMs: number;
-    /** Number of activities received from CS. */
     activityCount: number;
-    /** True if we cut off the stream at `timeoutMs`. */
     timedOut: boolean;
-    /** True if CS responded successfully. */
+    sawEndOfConversation: boolean;
     ok: boolean;
-    /** Error message if `ok` is false. */
     error?: string;
   };
 }
 
-const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_HARD_TIMEOUT_MS = 30_000;
 
 /**
- * Drain an async iterable while a `keepGoing()` predicate returns true,
- * with an overall hard timeout. Yields each value until either:
- *   - the iterable ends naturally
- *   - `keepGoing()` returns false after at least one value
- *   - the hard timeout fires
- *
- * The hard timeout is a backstop. The expected exit is `keepGoing` going
- * false (e.g. "we have what we need").
+ * Wrap an async iterable with a hard total-time timeout. Backstop only.
+ * Yields each value until the source ends or the timer fires.
  */
-async function* drainWhile<T>(
+async function* withHardTimeout<T>(
   source: AsyncIterable<T>,
   hardTimeoutMs: number,
-  keepGoing: () => boolean,
   onTimeout: () => void
 ): AsyncIterable<T> {
   const iter = source[Symbol.asyncIterator]();
   const start = Date.now();
   while (true) {
-    if (!keepGoing()) return;
     const remaining = hardTimeoutMs - (Date.now() - start);
     if (remaining <= 0) {
       onTimeout();
@@ -162,54 +131,49 @@ async function* drainWhile<T>(
   }
 }
 
-/**
- * Extract citations from an activity. Looks at:
- *   - `entities[*]` of type `https://schema.org/Claim`
- *   - `attachments[*]` with content URLs (best-effort)
- */
-function extractCitations(activity: CsActivity, into: Citation[]): void {
-  const ents = activity.entities ?? [];
+function extractCitations(activity: Activity, into: Citation[]): void {
+  const ents = (activity as unknown as {
+    entities?: Array<Record<string, unknown>>;
+  }).entities;
+  if (!Array.isArray(ents)) return;
   for (const e of ents) {
-    if (
-      e &&
-      typeof e === 'object' &&
-      typeof (e as Record<string, unknown>)['@type'] === 'string' &&
-      ((e as Record<string, unknown>)['@type'] as string).includes('Claim')
-    ) {
-      const url = (e as Record<string, unknown>).url ?? (e as Record<string, unknown>).appearance;
-      const title = (e as Record<string, unknown>).name ?? 'Source';
-      if (typeof url === 'string') {
-        into.push({ title: typeof title === 'string' ? title : 'Source', url });
-      }
-    }
-  }
-  const atts = activity.attachments ?? [];
-  for (const a of atts) {
-    if (a?.contentUrl && typeof a.contentUrl === 'string' && a.contentUrl.startsWith('http')) {
-      into.push({ title: a.name ?? 'Attachment', url: a.contentUrl });
+    if (!e || typeof e !== 'object') continue;
+    // Accept both `https://schema.org/Claim` and shorter `Claim`.
+    const t = e['@type'] ?? e['type'];
+    if (typeof t !== 'string' || !t.toLowerCase().includes('claim')) continue;
+    const url = e.url ?? e.appearance;
+    const name = e.name ?? 'Source';
+    if (typeof url === 'string') {
+      into.push({
+        title: typeof name === 'string' ? name : 'Source',
+        url
+      });
     }
   }
 }
 
-/**
- * Extract a chart payload if CS sent one.
- *
- * Convention: CS emits an attachment with
- * `contentType: 'application/vnd.mcsmcpapps.chart+json'` containing a
- * `ChartData` object. CS makers wire this from a Power Automate flow
- * that calls Eurostat / their data source and packages the result.
- */
-function extractChart(activity: CsActivity): ChartData | null {
-  const atts = activity.attachments ?? [];
+function extractChart(activity: Activity): ChartData | null {
+  const atts = (activity as unknown as {
+    attachments?: Array<{
+      contentType?: string;
+      content?: Partial<ChartData>;
+    }>;
+  }).attachments;
+  if (!Array.isArray(atts)) return null;
   for (const a of atts) {
-    if (a?.contentType === 'application/vnd.mcsmcpapps.chart+json' && a.content) {
-      const c = a.content as Partial<ChartData>;
+    if (
+      a?.contentType === 'application/vnd.mcsmcpapps.chart+json' &&
+      a.content
+    ) {
+      const c = a.content;
       if (c.kind === 'stat' || c.kind === 'compare' || c.kind === 'trend') {
         return {
           kind: c.kind,
           title: typeof c.title === 'string' ? c.title : undefined,
-          primaryValue: typeof c.primaryValue === 'string' ? c.primaryValue : undefined,
-          deltaText: typeof c.deltaText === 'string' ? c.deltaText : undefined,
+          primaryValue:
+            typeof c.primaryValue === 'string' ? c.primaryValue : undefined,
+          deltaText:
+            typeof c.deltaText === 'string' ? c.deltaText : undefined,
           series: Array.isArray(c.series) ? c.series : undefined
         };
       }
@@ -218,21 +182,78 @@ function extractChart(activity: CsActivity): ChartData | null {
   return null;
 }
 
+/** What we collect per turn. */
+interface TurnState {
+  replyParts: string[];
+  citations: Citation[];
+  chart: ChartData | null;
+  conversationId: string | null;
+  activityCount: number;
+  sawEndOfConversation: boolean;
+}
+
 /**
- * Call the CS agent and return a structured result. Never throws — all
- * errors are captured in `diag.error` and `diag.ok = false` so the
- * caller can surface them in the widget.
+ * Iterate a CS streaming reply; collect text + citations + chart and
+ * exit on `EndOfConversation`. Per the MS sample, this is the canonical
+ * end-of-turn signal.
  */
+async function consumeTurn(
+  source: AsyncIterable<Activity>,
+  state: TurnState,
+  hardTimeoutMs: number,
+  onTimeout: () => void
+): Promise<void> {
+  for await (const activity of withHardTimeout(source, hardTimeoutMs, onTimeout)) {
+    state.activityCount += 1;
+    const a = activity as unknown as {
+      type?: string;
+      text?: string;
+      conversation?: { id?: string };
+    };
+    // eslint-disable-next-line no-console
+    console.log(
+      `[cs] activity #${state.activityCount} type=${a.type ?? '?'} textLen=${typeof a.text === 'string' ? a.text.length : 0}${a.conversation?.id ? ' conv=' + String(a.conversation.id).slice(0, 8) : ''}`
+    );
+    if (a.conversation?.id) state.conversationId = a.conversation.id;
+
+    if (a.type === ActivityTypes.EndOfConversation) {
+      state.sawEndOfConversation = true;
+      // EndOfConversation activities sometimes carry a final summary
+      // text; capture it if so.
+      if (typeof a.text === 'string' && a.text.trim()) {
+        state.replyParts.push(a.text);
+      }
+      return; // exit the loop
+    }
+
+    if (a.type === ActivityTypes.Message && typeof a.text === 'string' && a.text.trim()) {
+      state.replyParts.push(a.text);
+    }
+
+    extractCitations(activity, state.citations);
+    const chart = extractChart(activity);
+    if (chart) state.chart = chart;
+  }
+}
+
 export async function callCsAgent(
   params: CallCsAgentParams
 ): Promise<CallCsAgentResult> {
   const start = Date.now();
+  const hardTimeoutMs = params.hardTimeoutMs ?? DEFAULT_HARD_TIMEOUT_MS;
+
   const result: CallCsAgentResult = {
     replyText: '',
     citations: [],
     chartData: null,
     conversationId: params.conversationId ?? null,
-    diag: { csCallMs: 0, activityCount: 0, timedOut: false, ok: false }
+    diag: {
+      csCallMs: 0,
+      activityCount: 0,
+      timedOut: false,
+      sawEndOfConversation: false,
+      ok: false
+    }
   };
 
   try {
@@ -245,105 +266,96 @@ export async function callCsAgent(
     };
     const client = new CopilotStudioClient(settings, params.ppToken);
 
-    const replyParts: string[] = [];
-    let lastBotMessageAt = 0;
-    const handleActivity = (a: CsActivity): void => {
-      result.diag.activityCount += 1;
-      // eslint-disable-next-line no-console
-      console.log(
-        `[cs] activity #${result.diag.activityCount} type=${a.type ?? '?'} textLen=${typeof a.text === 'string' ? a.text.length : 0}${a.conversation?.id ? ' convId=' + String(a.conversation.id).slice(0, 8) : ''}`
-      );
-      if (a.conversation?.id) result.conversationId = a.conversation.id;
-      if (a.type === 'message' && typeof a.text === 'string' && a.text.trim()) {
-        replyParts.push(a.text);
-        lastBotMessageAt = Date.now();
-      }
-      extractCitations(a, result.citations);
-      const chart = extractChart(a);
-      if (chart) result.chartData = chart;
+    const state: TurnState = {
+      replyParts: [],
+      citations: result.citations,
+      chart: null,
+      conversationId: result.conversationId,
+      activityCount: 0,
+      sawEndOfConversation: false
     };
 
-    const hardTimeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const startConversationCapMs = 3000; // we only need the conversation id
-    const idleAfterReplyMs = 800; // wait this long for follow-on chunks
-
-    let opened = false;
+    // Step 1 (only if no conversation id): open a new conversation.
+    // The MS sample passes `true` to startConversationStreaming meaning
+    // "emit start conversation event" — we do the same. The greeting
+    // turn ends with EndOfConversation, so consumeTurn returns cleanly.
     if (!params.conversationId) {
-      // Brand-new conversation: drain the start stream just long enough
-      // to get the conversation id. Bot greeting (if any) is captured
-      // but we don't wait for it — that's not the user's question yet.
       const startedAt = Date.now();
-      const stream = client.startConversationStreaming() as AsyncIterable<CsActivity>;
-      for await (const activity of drainWhile(
-        stream,
-        startConversationCapMs,
-        () => !result.conversationId, // exit as soon as we have a conv id
+      // eslint-disable-next-line no-console
+      console.log('[cs] startConversationStreaming(true)');
+      const startStream = client.startConversationStreaming(
+        true
+      ) as AsyncIterable<Activity>;
+      const startState: TurnState = {
+        ...state,
+        replyParts: [] // discard greeting text; not the answer
+      };
+      await consumeTurn(
+        startStream,
+        startState,
+        Math.max(2000, hardTimeoutMs - (Date.now() - start)),
         () => {
-          // start-stream timeout is informational only; not fatal here
-          // eslint-disable-next-line no-console
-          console.log('[cs] startConversationStreaming cap hit (informational)');
+          result.diag.timedOut = true;
         }
-      )) {
-        handleActivity(activity);
-      }
+      );
+      state.conversationId = startState.conversationId;
+      state.activityCount += startState.activityCount;
       // eslint-disable-next-line no-console
       console.log(
-        `[cs] start stream done in ${Date.now() - startedAt}ms; convId=${result.conversationId ? String(result.conversationId).slice(0, 12) + '...' : 'none'}`
+        `[cs] startConversation done in ${Date.now() - startedAt}ms; convId=${state.conversationId ? String(state.conversationId).slice(0, 12) + '\u2026' : 'NONE'}; eoc=${startState.sawEndOfConversation}`
       );
-      opened = true;
-      if (!result.conversationId) {
+      if (!state.conversationId) {
         result.diag.csCallMs = Date.now() - start;
+        result.diag.activityCount = state.activityCount;
         result.diag.ok = false;
-        result.diag.error = 'CS did not return a conversation id';
+        result.diag.error =
+          'CS startConversation returned no conversation id' +
+          (result.diag.timedOut ? ' (hard timeout)' : '');
         return result;
       }
     }
 
-    // Send the user's activity and drain until we have a bot reply
-    // (type=message with text) and then wait `idleAfterReplyMs` for any
-    // follow-on chunks. Hard timeout backstops at hardTimeoutMs total.
+    // Step 2: send the user's activity and consume the streaming reply
+    // until EndOfConversation.
     const sendStartedAt = Date.now();
-    const userActivity = {
-      type: 'message',
-      from: { id: 'user', role: 'user' },
-      text: params.userQuery,
-      ...(result.conversationId
-        ? { conversation: { id: result.conversationId } }
-        : {})
-    };
+    // eslint-disable-next-line no-console
+    console.log(
+      `[cs] sendActivityStreaming text="${params.userQuery.slice(0, 80)}${params.userQuery.length > 80 ? '\u2026' : ''}" conv=${state.conversationId ? String(state.conversationId).slice(0, 8) : 'new'}`
+    );
+    const userActivity = new Activity(ActivityTypes.Message);
+    userActivity.text = params.userQuery;
+    if (state.conversationId) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (userActivity as any).conversation = { id: state.conversationId };
+    }
+
     const sendStream = client.sendActivityStreaming(
-      userActivity as never,
-      result.conversationId ?? undefined
-    ) as AsyncIterable<CsActivity>;
-    for await (const activity of drainWhile(
+      userActivity
+    ) as AsyncIterable<Activity>;
+    await consumeTurn(
       sendStream,
+      state,
       Math.max(2000, hardTimeoutMs - (Date.now() - start)),
-      () => {
-        // Keep going if we haven't seen any bot reply yet, OR if we've
-        // seen one within the last idle window (more chunks may stream).
-        if (lastBotMessageAt === 0) return true;
-        return Date.now() - lastBotMessageAt < idleAfterReplyMs;
-      },
       () => {
         result.diag.timedOut = true;
       }
-    )) {
-      handleActivity(activity);
-    }
+    );
     // eslint-disable-next-line no-console
     console.log(
-      `[cs] send stream done in ${Date.now() - sendStartedAt}ms; replyChunks=${replyParts.length} timedOut=${result.diag.timedOut}`
+      `[cs] sendActivity done in ${Date.now() - sendStartedAt}ms; replyChunks=${state.replyParts.length} eoc=${state.sawEndOfConversation} timedOut=${result.diag.timedOut}`
     );
 
-    result.replyText = replyParts.join('\n').trim();
+    result.replyText = state.replyParts.join('\n').trim();
+    result.chartData = state.chart;
+    result.conversationId = state.conversationId;
+    result.diag.activityCount = state.activityCount;
+    result.diag.sawEndOfConversation = state.sawEndOfConversation;
     result.diag.csCallMs = Date.now() - start;
     result.diag.ok = result.replyText.length > 0;
     if (!result.diag.ok && !result.diag.error) {
       result.diag.error = result.diag.timedOut
-        ? 'CS stream timed out before any bot reply'
-        : opened
-          ? 'CS returned no reply text'
-          : 'CS sendActivity returned no reply text';
+        ? 'CS stream timed out before reply'
+        : 'CS returned no reply text';
     }
     return result;
   } catch (err) {
