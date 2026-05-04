@@ -190,6 +190,8 @@ export function registerOpenCopilotStudioChatTool(
             replyText: '',
             citations: [],
             chartData: null,
+            adaptiveCards: [],
+            suggestedActions: [],
             conversationId: null,
             agentDisplayName: config.agentName,
             diag
@@ -301,6 +303,7 @@ export function registerOpenCopilotStudioChatTool(
           citations: cs.citations,
           chartData: cs.chartData,
           adaptiveCards: cs.adaptiveCards,
+          suggestedActions: cs.suggestedActions,
           conversationId: cs.conversationId,
           agentDisplayName: config.agentName,
           userQuery,

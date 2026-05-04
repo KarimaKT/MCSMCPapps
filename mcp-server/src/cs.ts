@@ -48,7 +48,7 @@ export interface CallCsAgentParams {
   schema: string;
   /** OBO'd Power Platform API access token (Bearer). */
   ppToken: string;
-  /** User's question, passed verbatim. */
+  /** User's question, passed verbatim. May be empty for a card submit. */
   userQuery: string;
   /**
    * Optional CS conversation id from a prior tool call. Echo this from
@@ -56,6 +56,14 @@ export interface CallCsAgentParams {
    * across user turns.
    */
   conversationId?: string;
+  /**
+   * v0.7.1+: Adaptive Card submit value. When provided, we send the
+   * activity with `value: submitValue` (and optional `name: 'submit'`)
+   * — this is what CS topics check for slot-filling. `userQuery` is
+   * still set as `text` for transcript readability but the topic
+   * routes on `value`.
+   */
+  submitValue?: Record<string, unknown>;
   /** Power Platform cloud. Defaults to Prod. */
   cloud?: PowerPlatformCloud;
   /**
@@ -87,6 +95,18 @@ export interface ChartData {
  */
 export type AdaptiveCard = Record<string, unknown>;
 
+/**
+ * A "quick reply" suggested by the CS agent. Comes from
+ * `activity.suggestedActions.actions[]`. CS sets `title` (button label)
+ * and `value` (what to send when clicked). v0.7.2+.
+ */
+export interface SuggestedAction {
+  title: string;
+  value: string;
+  /** `messageBack` / `imBack` / `postBack` etc. — informational. */
+  type?: string;
+}
+
 export interface CallCsAgentResult {
   replyText: string;
   citations: Citation[];
@@ -96,11 +116,17 @@ export interface CallCsAgentResult {
    * Empty when the reply has no AC attachments. v0.7.0+.
    */
   adaptiveCards: AdaptiveCard[];
+  /**
+   * Quick replies / suggested actions from CS. Empty when none.
+   * v0.7.2+.
+   */
+  suggestedActions: SuggestedAction[];
   conversationId: string | null;
   diag: {
     csCallMs: number;
     activityCount: number;
     adaptiveCardCount: number;
+    suggestedActionCount: number;
     timedOut: boolean;
     sawEndOfConversation: boolean;
     ok: boolean;
@@ -228,12 +254,38 @@ function extractAdaptiveCards(
   }
 }
 
+/**
+ * Extract suggested actions / quick replies from a CS activity. CS
+ * exposes them via `activity.suggestedActions.actions[]` with
+ * `{ type, title, value }`. We keep only message-style actions (the
+ * ones that, when clicked, send `value` as a typed message back). v0.7.2+.
+ */
+function extractSuggestedActions(
+  activity: Activity,
+  into: SuggestedAction[]
+): void {
+  const sa = (activity as unknown as {
+    suggestedActions?: {
+      actions?: Array<{ type?: string; title?: string; value?: string }>;
+    };
+  }).suggestedActions;
+  if (!sa || !Array.isArray(sa.actions)) return;
+  for (const a of sa.actions) {
+    if (!a) continue;
+    const title = typeof a.title === 'string' ? a.title : '';
+    const value = typeof a.value === 'string' ? a.value : title;
+    if (!title) continue;
+    into.push({ title, value, type: typeof a.type === 'string' ? a.type : undefined });
+  }
+}
+
 /** What we collect per turn. */
 interface TurnState {
   replyParts: string[];
   citations: Citation[];
   chart: ChartData | null;
   adaptiveCards: AdaptiveCard[];
+  suggestedActions: SuggestedAction[];
   conversationId: string | null;
   activityCount: number;
   sawEndOfConversation: boolean;
@@ -281,6 +333,7 @@ async function consumeTurn(
     const chart = extractChart(activity);
     if (chart) state.chart = chart;
     extractAdaptiveCards(activity, state.adaptiveCards);
+    extractSuggestedActions(activity, state.suggestedActions);
   }
 }
 
@@ -295,11 +348,13 @@ export async function callCsAgent(
     citations: [],
     chartData: null,
     adaptiveCards: [],
+    suggestedActions: [],
     conversationId: params.conversationId ?? null,
     diag: {
       csCallMs: 0,
       activityCount: 0,
       adaptiveCardCount: 0,
+      suggestedActionCount: 0,
       timedOut: false,
       sawEndOfConversation: false,
       ok: false
@@ -321,6 +376,7 @@ export async function callCsAgent(
       citations: result.citations,
       chart: null,
       adaptiveCards: result.adaptiveCards,
+      suggestedActions: result.suggestedActions,
       conversationId: result.conversationId,
       activityCount: 0,
       sawEndOfConversation: false
@@ -380,12 +436,19 @@ export async function callCsAgent(
     // Step 2 — send the user's activity and consume the streaming
     // reply until EndOfConversation.
     const sendStartedAt = Date.now();
+    const isSubmit = !!params.submitValue;
     // eslint-disable-next-line no-console
     console.log(
-      `[cs] sendActivityStreaming text="${params.userQuery.slice(0, 80)}${params.userQuery.length > 80 ? '\u2026' : ''}" conv=${state.conversationId ? String(state.conversationId).slice(0, 8) : 'new'}`
+      `[cs] sendActivityStreaming kind=${isSubmit ? 'cardSubmit' : 'message'} text="${params.userQuery.slice(0, 80)}${params.userQuery.length > 80 ? '\u2026' : ''}" conv=${state.conversationId ? String(state.conversationId).slice(0, 8) : 'new'}`
     );
     const userActivity = new Activity(ActivityTypes.Message);
     userActivity.text = params.userQuery;
+    if (isSubmit) {
+      // CS topics that wait on a card submit check `activity.value`
+      // for slot-filling. Setting it here is what makes forms work.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (userActivity as any).value = params.submitValue;
+    }
     if (state.conversationId) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (userActivity as any).conversation = { id: state.conversationId };
@@ -412,6 +475,7 @@ export async function callCsAgent(
     result.conversationId = state.conversationId;
     result.diag.activityCount = state.activityCount;
     result.diag.adaptiveCardCount = state.adaptiveCards.length;
+    result.diag.suggestedActionCount = state.suggestedActions.length;
     result.diag.sawEndOfConversation = state.sawEndOfConversation;
     result.diag.csCallMs = Date.now() - start;
     result.diag.ok = result.replyText.length > 0 || state.adaptiveCards.length > 0;

@@ -46,12 +46,17 @@ interface ChartData {
 /** Verbatim Adaptive Card JSON from CS. Spec 0002. */
 type AdaptiveCardPayload = Record<string, unknown>;
 
+/** Quick reply / suggested action from CS. v0.7.2+. */
+interface SuggestedAction { title: string; value: string; type?: string }
+
 interface ToolPayload {
   replyText: string;
   citations: Citation[];
   chartData: ChartData | null;
   /** v0.7.0+: Adaptive Cards extracted from CS reply activities. */
   adaptiveCards?: AdaptiveCardPayload[];
+  /** v0.7.2+: Quick replies from CS. Buttons under the reply. */
+  suggestedActions?: SuggestedAction[];
   conversationId: string | null;
   agentDisplayName: string;
   userQuery?: string;
@@ -186,6 +191,63 @@ function CitationsList({ items }: { items: Citation[] }) {
   );
 }
 
+/**
+ * Quick reply buttons from CS's `suggestedActions`. Click → call
+ * `openCopilotStudioChat` with the action's value as `userQuery` and
+ * the live conversationId so the CS topic resumes correctly.
+ * v0.7.2+.
+ */
+function SuggestedActionsRow({
+  actions,
+  conversationId
+}: {
+  actions: SuggestedAction[];
+  conversationId: string | null;
+}) {
+  const [busy, setBusy] = useState(false);
+  if (!actions || actions.length === 0) return null;
+  const onClick = async (a: SuggestedAction) => {
+    if (busy) return;
+    if (!host()?.callTool) return;
+    setBusy(true);
+    try {
+      await host()!.callTool!('openCopilotStudioChat', {
+        userQuery: a.value,
+        conversationId: conversationId ?? undefined
+      });
+    } catch {
+      // Host re-render handles reply; on error, just unblock.
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div
+      className="mcs-suggested"
+      role="group"
+      aria-label="Suggested replies"
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 6,
+        marginTop: 12
+      }}
+    >
+      {actions.slice(0, 8).map((a, i) => (
+        <button
+          key={i}
+          className="mcs-btn"
+          disabled={busy}
+          onClick={() => onClick(a)}
+          style={{ fontSize: 12, padding: '4px 10px' }}
+        >
+          {a.title}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ErrorState({ payload }: { payload: ToolPayload }) {
   const err = payload.diag?.error ?? payload.diag?.message ?? 'Unknown error';
   return (
@@ -212,25 +274,15 @@ function ErrorState({ payload }: { payload: ToolPayload }) {
  */
 function AdaptiveCardBlock({ card }: { card: AdaptiveCardPayload }) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const acRef = useRef<AdaptiveCards.AdaptiveCard | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [hasSubmit, setHasSubmit] = useState<boolean>(false);
+  const [submitting, setSubmitting] = useState<boolean>(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!ref.current) return;
     setError(null);
-    // Cheap pre-scan of the JSON for interactive inputs / submit actions
-    // so we can show the v0.7.0 "forms in v0.7.1" banner without parsing
-    // twice. Look for any input/action.submit pattern in the serialized
-    // card. False positives are fine; the banner is informational.
-    try {
-      const serialized = JSON.stringify(card).toLowerCase();
-      setHasSubmit(
-        serialized.includes('action.submit') ||
-          /"type"\s*:\s*"input\./i.test(JSON.stringify(card))
-      );
-    } catch {
-      setHasSubmit(false);
-    }
+    setSubmitError(null);
     try {
       const ac = new AdaptiveCards.AdaptiveCard();
       // Minimal HostConfig honoring the widget's CSS custom props.
@@ -268,15 +320,54 @@ function AdaptiveCardBlock({ card }: { card: AdaptiveCardPayload }) {
           return;
         }
         if (action instanceof AdaptiveCards.SubmitAction) {
-          // v0.7.1 (spec 0003) will wire this to `submitAdaptiveCardAction`.
-          // For v0.7.0 we deliberately no-op so static cards render safely
-          // without false-positive submit handlers.
-          // eslint-disable-next-line no-console
-          console.log('[widget] AC Submit clicked (v0.7.0 no-op)', action.data);
+          // v0.7.1: post the form back to the live CS conversation.
+          // We collect every input value from the rendered card, then
+          // call the `submitAdaptiveCardAction` tool. The host will
+          // re-render the widget with CS's reply (next card / next text).
+          (async () => {
+            setSubmitError(null);
+            const liveCard = acRef.current;
+            if (!liveCard) return;
+            const value: Record<string, unknown> = {};
+            try {
+              const inputs = liveCard.getAllInputs();
+              for (const input of inputs) {
+                if (input.id) value[input.id] = input.value;
+              }
+            } catch (e) {
+              setSubmitError('Failed to read form inputs: ' + (e as Error).message);
+              return;
+            }
+            const convId = readPayload()?.conversationId ?? null;
+            if (!convId) {
+              setSubmitError('No conversation id available for submit. Ask a question first.');
+              return;
+            }
+            if (!host()?.callTool) {
+              setSubmitError('Host bridge does not expose callTool; cannot submit.');
+              return;
+            }
+            setSubmitting(true);
+            try {
+              await host()!.callTool!('submitAdaptiveCardAction', {
+                conversationId: convId,
+                value,
+                actionTitle: action.title ?? '',
+                actionData: action.data ?? {}
+              });
+              // Host re-renders the widget with the new toolOutput. Our
+              // root-level set_globals listener picks it up.
+            } catch (e) {
+              setSubmitError('Submit failed: ' + (e as Error).message);
+            } finally {
+              setSubmitting(false);
+            }
+          })();
           return;
         }
       };
       ac.parse(card);
+      acRef.current = ac;
       const rendered = ac.render();
       ref.current.innerHTML = '';
       if (rendered) ref.current.appendChild(rendered);
@@ -294,25 +385,31 @@ function AdaptiveCardBlock({ card }: { card: AdaptiveCardPayload }) {
     );
   }
   return (
-    <div>
-      {hasSubmit ? (
+    <div style={{ position: 'relative' }}>
+      <div className="mcs-ac" ref={ref} />
+      {submitting ? (
         <div
-          className="mcs-banner"
+          aria-live="polite"
           style={{
-            fontSize: 12,
+            position: 'absolute',
+            inset: 0,
+            background: 'rgba(255,255,255,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 13,
             color: 'var(--muted, #6b6b6b)',
-            background: 'var(--surface, #f5f5f5)',
-            border: '1px solid var(--border, #e0e0e0)',
-            borderRadius: 4,
-            padding: '6px 10px',
-            marginBottom: 8
+            borderRadius: 6
           }}
         >
-          Interactive form inputs are coming in v0.7.1. Buttons that open
-          a URL work today; Submit buttons currently do not post back.
+          Submitting…
         </div>
       ) : null}
-      <div className="mcs-ac" ref={ref} />
+      {submitError ? (
+        <div className="mcs-error" style={{ marginTop: 8 }}>
+          <small>{submitError}</small>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -359,6 +456,9 @@ function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>(() =>
     host()?.theme === 'dark' ? 'dark' : 'light'
   );
+  const [displayMode, setDisplayMode] = useState<'inline' | 'fullscreen'>(() =>
+    host()?.displayMode === 'fullscreen' ? 'fullscreen' : 'inline'
+  );
 
   // Watch for late toolOutput delivery (host may mount the iframe before
   // the tool result is ready).
@@ -382,6 +482,8 @@ function App() {
     const onSetGlobals = () => {
       const t = host()?.theme;
       if (t === 'light' || t === 'dark') setTheme(t);
+      const dm = host()?.displayMode;
+      if (dm === 'inline' || dm === 'fullscreen') setDisplayMode(dm);
       const p = readPayload();
       if (p) setPayload(p);
     };
@@ -412,6 +514,32 @@ function App() {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
 
+  // Apply display mode to body for fullscreen-only CSS hooks.
+  useEffect(() => {
+    document.documentElement.setAttribute('data-display', displayMode);
+  }, [displayMode]);
+
+  // Keyboard shortcuts in fullscreen: c = copy, p = print, Esc = back to inline.
+  useEffect(() => {
+    if (displayMode !== 'fullscreen') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target && (e.target as HTMLElement).tagName === 'INPUT') return;
+      if (e.target && (e.target as HTMLElement).tagName === 'TEXTAREA') return;
+      if (e.key === 'c' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        const txt = readPayload()?.replyText ?? '';
+        navigator.clipboard?.writeText(txt).catch(() => undefined);
+      } else if (e.key === 'p' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        try { window.print(); } catch { /* ignore */ }
+      } else if (e.key === 'Escape') {
+        host()?.requestDisplayMode?.({ mode: 'inline' });
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [displayMode]);
+
   if (!payload) {
     const userQuery = host()?.toolInput?.userQuery;
     return <div className="mcs-pending">Loading{userQuery ? ' “' + userQuery + '”' : ''}…</div>;
@@ -424,13 +552,14 @@ function App() {
 
   const chart = payload.chartData;
   const cards = payload.adaptiveCards ?? [];
-  const isFullscreen = host()?.displayMode === 'fullscreen';
+  const isFullscreen = displayMode === 'fullscreen';
   const onOpenFullscreen = () => {
     host()?.requestDisplayMode?.({ mode: 'fullscreen' });
   };
+  const onBackToInline = () => {
+    host()?.requestDisplayMode?.({ mode: 'inline' });
+  };
   const onCopy = async () => {
-    // Copy the rendered text. Falls back gracefully if clipboard API
-    // is blocked by the sandbox (rare but possible).
     try {
       const txt = payload.replyText ?? '';
       if (navigator.clipboard?.writeText) {
@@ -450,9 +579,6 @@ function App() {
     }
   };
   const onPrint = () => {
-    // window.print works inside the skybridge iframe and prints just
-    // the iframe contents — exactly the analyst canvas. Browser handles
-    // the "Save as PDF" destination from the print dialog.
     try {
       window.print();
     } catch {
@@ -460,31 +586,33 @@ function App() {
     }
   };
 
+  // Brand initial for the avatar — first character of the agent name.
+  const avatarChar = (payload.agentDisplayName || 'A').charAt(0).toUpperCase();
+  const convChip = payload.conversationId
+    ? payload.conversationId.slice(0, 8)
+    : null;
+
   return (
     <div className="mcs-card">
       {isFullscreen ? (
-        <div
-          className="mcs-toolbar"
-          style={{
-            display: 'flex',
-            gap: 8,
-            justifyContent: 'flex-end',
-            marginBottom: 8,
-            position: 'sticky',
-            top: 0,
-            background: 'var(--bg, #fff)',
-            paddingBottom: 8,
-            borderBottom: '1px solid var(--border, #e0e0e0)',
-            zIndex: 1
-          }}
-        >
-          <button className="mcs-btn" onClick={onCopy} aria-label="Copy answer text">
-            Copy
-          </button>
-          <button className="mcs-btn" onClick={onPrint} aria-label="Print or save as PDF">
-            Print / Save as PDF
-          </button>
-        </div>
+        <header className="mcs-canvas-header">
+          <div className="mcs-avatar" aria-hidden>{avatarChar}</div>
+          <div className="mcs-canvas-title">
+            {payload.agentDisplayName}
+            {convChip ? <span className="mcs-chip" style={{ marginLeft: 10 }}>conv {convChip}</span> : null}
+          </div>
+          <div className="mcs-canvas-toolbar">
+            <button className="mcs-btn" onClick={onCopy} title="Copy answer (c)">
+              Copy
+            </button>
+            <button className="mcs-btn" onClick={onPrint} title="Print or save as PDF (p)">
+              Print
+            </button>
+            <button className="mcs-btn" onClick={onBackToInline} title="Back to chat (Esc)">
+              Done
+            </button>
+          </div>
+        </header>
       ) : null}
       {chart && chart.kind === 'stat' ? <StatCard chart={chart} /> : null}
       {chart && chart.kind === 'compare' ? <CompareCard chart={chart} /> : null}
@@ -498,6 +626,10 @@ function App() {
         </div>
       ) : null}
       <CitationsList items={payload.citations ?? []} />
+      <SuggestedActionsRow
+        actions={payload.suggestedActions ?? []}
+        conversationId={payload.conversationId}
+      />
       <div className="mcs-actions">
         {!isFullscreen && host()?.requestDisplayMode ? (
           <button className="mcs-btn primary" onClick={onOpenFullscreen}>

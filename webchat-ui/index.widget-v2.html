@@ -126,6 +126,150 @@
         color: var(--accent-fg);
         border-color: var(--accent);
       }
+
+      /* ---------- Markdown rendering ---------- */
+      .mcs-md { line-height: 1.6; font-size: 14px; }
+      .mcs-md > *:first-child { margin-top: 0; }
+      .mcs-md > *:last-child { margin-bottom: 0; }
+      .mcs-md p { margin: 0.6em 0; }
+      .mcs-md h1, .mcs-md h2, .mcs-md h3, .mcs-md h4 {
+        margin: 1.1em 0 0.5em;
+        line-height: 1.25;
+        font-weight: 600;
+      }
+      .mcs-md h1 { font-size: 22px; }
+      .mcs-md h2 { font-size: 18px; border-bottom: 1px solid var(--card-border); padding-bottom: 4px; }
+      .mcs-md h3 { font-size: 16px; }
+      .mcs-md h4 { font-size: 14px; color: var(--muted); }
+      .mcs-md ul, .mcs-md ol { padding-left: 22px; margin: 0.5em 0; }
+      .mcs-md li { margin: 0.25em 0; }
+      .mcs-md a { color: var(--accent); text-decoration: none; }
+      .mcs-md a:hover { text-decoration: underline; }
+      .mcs-md code {
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 0.9em;
+        background: var(--hover);
+        padding: 1px 5px;
+        border-radius: 3px;
+      }
+      .mcs-md pre {
+        background: var(--hover);
+        padding: 10px 12px;
+        border-radius: 6px;
+        overflow-x: auto;
+      }
+      .mcs-md pre code { background: none; padding: 0; }
+      .mcs-md blockquote {
+        margin: 0.5em 0;
+        padding: 4px 12px;
+        border-left: 3px solid var(--accent);
+        color: var(--muted);
+        background: var(--hover);
+        border-radius: 0 4px 4px 0;
+      }
+      .mcs-md table {
+        border-collapse: collapse;
+        margin: 0.7em 0;
+        font-size: 13px;
+        max-width: 100%;
+      }
+      .mcs-md table th,
+      .mcs-md table td {
+        border: 1px solid var(--card-border);
+        padding: 6px 10px;
+        text-align: left;
+        vertical-align: top;
+      }
+      .mcs-md table th {
+        background: var(--hover);
+        font-weight: 600;
+      }
+      .mcs-md hr {
+        border: 0;
+        border-top: 1px solid var(--card-border);
+        margin: 1em 0;
+      }
+      .mcs-md img {
+        max-width: 100%;
+        border-radius: 6px;
+      }
+
+      /* ---------- Adaptive Cards integration ---------- */
+      .mcs-ac { font-size: 14px; }
+      .mcs-ac .ac-image { border-radius: 6px; }
+      .mcs-ac .ac-pushButton {
+        background: var(--accent) !important;
+        color: var(--accent-fg) !important;
+        border-color: var(--accent) !important;
+      }
+
+      /* ---------- Fullscreen analyst canvas ---------- */
+      [data-display='fullscreen'] body { background: var(--bg); }
+      [data-display='fullscreen'] .mcs-card {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 24px 32px 64px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+      }
+      [data-display='fullscreen'] .mcs-md { font-size: 15px; }
+      [data-display='fullscreen'] .mcs-md h1 { font-size: 26px; }
+      [data-display='fullscreen'] .mcs-md h2 { font-size: 20px; }
+
+      .mcs-canvas-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 0;
+        margin-bottom: 16px;
+        border-bottom: 1px solid var(--card-border);
+        position: sticky;
+        top: 0;
+        background: var(--bg);
+        z-index: 5;
+      }
+      .mcs-avatar {
+        width: 36px; height: 36px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: var(--accent-fg);
+        display: flex; align-items: center; justify-content: center;
+        font-weight: 700;
+        flex-shrink: 0;
+      }
+      .mcs-canvas-title { font-size: 16px; font-weight: 600; flex-grow: 1; }
+      .mcs-chip {
+        font-size: 11px;
+        color: var(--muted);
+        background: var(--hover);
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-variant-numeric: tabular-nums;
+        font-family: ui-monospace, Consolas, monospace;
+      }
+      .mcs-canvas-toolbar {
+        display: flex;
+        gap: 8px;
+      }
+
+      /* ---------- Print: clean single-column document ---------- */
+      @media print {
+        :root {
+          --bg: #ffffff;
+          --fg: #000000;
+          --muted: #444;
+          --card-bg: #ffffff;
+          --card-border: #cccccc;
+          --accent: #003399;
+        }
+        .mcs-canvas-header,
+        .mcs-actions,
+        .mcs-banner,
+        .mcs-toolbar { display: none !important; }
+        .mcs-card { padding: 0 !important; }
+        a { color: var(--accent); }
+      }
     </style>
   </head>
   <body>

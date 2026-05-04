@@ -10,6 +10,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ServerConfig } from './config.js';
 import { registerChatWidgetResource } from './resources/chatWidget.js';
 import { registerOpenCopilotStudioChatTool } from './tools/openCopilotStudioChat.js';
+import { registerSubmitAdaptiveCardActionTool } from './tools/submitAdaptiveCardAction.js';
 
 /** Server name + version advertised in `initialize` responses. */
 export const SERVER_NAME = 'mcsmcpapps';
@@ -37,6 +38,7 @@ export function buildServer(config: ServerConfig): McpServer {
   );
 
   registerOpenCopilotStudioChatTool(server, config);
+  registerSubmitAdaptiveCardActionTool(server, config);
   registerChatWidgetResource(server, config);
 
   return server;
