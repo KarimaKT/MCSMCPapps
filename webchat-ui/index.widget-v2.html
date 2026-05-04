@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Eurozone Analyst</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --fg: #1a1a1a;
+        --muted: #5b5d62;
+        --card-bg: #ffffff;
+        --card-border: #e2e3e6;
+        --accent: #003399;
+        --accent-fg: #ffffff;
+        --hover: #f1f3f5;
+        --positive: #107c10;
+        --negative: #c50f1f;
+      }
+      :host([data-theme='dark']),
+      [data-theme='dark'] {
+        --bg: #1f1f1f;
+        --fg: #f3f3f3;
+        --muted: #a0a0a0;
+        --card-bg: #2b2b2b;
+        --card-border: #3d3d3d;
+        --hover: #333333;
+      }
+      html, body, #root {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: 'Segoe UI', system-ui, -apple-system, Roboto, sans-serif;
+        font-size: 14px;
+        line-height: 1.4;
+      }
+      .mcs-card {
+        margin: 0;
+        padding: 16px;
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        border-radius: 8px;
+      }
+      .mcs-pending { color: var(--muted); padding: 16px; }
+      .mcs-error { color: var(--negative); padding: 16px; }
+      .mcs-error h4 { margin: 0 0 6px; font-size: 14px; }
+      .mcs-error pre {
+        margin: 8px 0 0;
+        padding: 8px;
+        background: var(--hover);
+        border: 1px solid var(--card-border);
+        border-radius: 4px;
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 11px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 200px;
+        overflow: auto;
+        color: var(--fg);
+      }
+      .mcs-stat {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .mcs-stat-title { font-size: 12px; color: var(--muted); }
+      .mcs-stat-value { font-size: 28px; font-weight: 600; line-height: 1.1; }
+      .mcs-stat-delta { font-size: 12px; color: var(--muted); }
+      .mcs-stat-delta.positive { color: var(--positive); }
+      .mcs-stat-delta.negative { color: var(--negative); }
+      .mcs-spark { margin-top: 8px; }
+      .mcs-compare { display: flex; flex-direction: column; gap: 8px; }
+      .mcs-compare-row {
+        display: grid;
+        grid-template-columns: 1fr 60px;
+        gap: 8px;
+        align-items: center;
+      }
+      .mcs-compare-bar {
+        height: 6px;
+        background: var(--hover);
+        border-radius: 3px;
+        overflow: hidden;
+        position: relative;
+      }
+      .mcs-compare-bar-fill {
+        height: 100%;
+        background: var(--accent);
+      }
+      .mcs-compare-label { font-size: 13px; }
+      .mcs-compare-value { font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; }
+      .mcs-citations {
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid var(--card-border);
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .mcs-citation {
+        font-size: 12px;
+        color: var(--muted);
+        text-decoration: none;
+      }
+      .mcs-citation:hover { text-decoration: underline; }
+      .mcs-actions {
+        margin-top: 12px;
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+      .mcs-btn {
+        font: inherit;
+        padding: 6px 12px;
+        border: 1px solid var(--card-border);
+        background: var(--card-bg);
+        color: var(--fg);
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .mcs-btn:hover { background: var(--hover); }
+      .mcs-btn.primary {
+        background: var(--accent);
+        color: var(--accent-fg);
+        border-color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div class="mcs-pending">Loading…</div>
+    </div>
+    <script type="module" src="/src/widget-v2/main.tsx"></script>
+  </body>
+</html>

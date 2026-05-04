@@ -42,7 +42,10 @@ const CANDIDATES = [
   // 1. Co-located with the deployed mcp-server (CI populates this).
   resolve(__dirname, 'assets', 'widget.html'),
   resolve(__dirname, '..', 'assets', 'widget.html'),
-  // 2. Local dev — built by `npm run build:widget` in webchat-ui.
+  // 2. v0.6 local dev — `npm run build:widget-v2` in webchat-ui.
+  resolve(__dirname, '..', '..', 'webchat-ui', 'dist-widget-v2', 'index.widget-v2.html'),
+  resolve(__dirname, '..', '..', '..', 'webchat-ui', 'dist-widget-v2', 'index.widget-v2.html'),
+  // 3. v0.5 local dev fallback (chat-in-chat) — `npm run build:widget`.
   resolve(__dirname, '..', '..', 'webchat-ui', 'dist-widget', 'index.widget.html'),
   resolve(__dirname, '..', '..', '..', 'webchat-ui', 'dist-widget', 'index.widget.html')
 ];

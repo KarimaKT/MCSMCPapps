@@ -50,6 +50,18 @@ export interface ServerConfig {
   agentDescription: string;
 
   /**
+   * Copilot Studio environment GUID.
+   * Set per CS agent. The server uses this when calling Direct Engine.
+   */
+  csEnvId: string;
+
+  /**
+   * Copilot Studio agent schema name (e.g. `ksteam_ak001`).
+   * Set per CS agent.
+   */
+  csSchema: string;
+
+  /**
    * HTTP port. Azure App Service injects `PORT` automatically.
    * @default 3000 (local dev)
    */
@@ -87,6 +99,8 @@ export function loadConfig(): ServerConfig {
       'AGENT_DESCRIPTION',
       'Open the embedded Copilot Studio chat surface.'
     ),
+    csEnvId: required('CS_ENV_ID', '61453fde-f312-e19f-b879-a2dfa518e914'),
+    csSchema: required('CS_SCHEMA', 'ksteam_ak001'),
     port: Number(process.env.PORT ?? 3000)
   };
 }

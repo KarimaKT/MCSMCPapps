@@ -1,47 +1,50 @@
 /**
  * Tool: `openCopilotStudioChat`
  *
- * Single tool exposed by this MCP server. The DA's host model calls this
- * tool to mount the Copilot Studio chat widget inside Microsoft 365 Copilot.
+ * Single tool exposed by the MCP server. M365 Copilot's host LLM calls
+ * this tool whenever the user types a message to a CS-backed agent.
  *
- * # Contract
+ * # v0.6 contract (data-widget pattern)
  *
- * Verified against Microsoft's official reference samples at
- * github.com/microsoft/mcp-interactiveUI-samples (oai-apps-sdk path).
- *
- * The `_meta` block on BOTH the descriptor and the response contains the
- * OpenAI Apps SDK keys that M365 Copilot's RemoteMCPServer client reads
- * today, plus the MCP Apps spec keys for forward compatibility:
- *
- *   - `openai/outputTemplate` — URI of the resource to render
- *   - `openai/widgetAccessible: true` — required to mount the widget
- *   - `openai/toolInvocation/invoking` — status while running
- *   - `openai/toolInvocation/invoked` — status when done
- *   - `ui.resourceUri` — MCP Apps spec name (forward compat)
+ * Per spec 0001 + ADR 0001, this tool is no longer a "open the chat
+ * surface" stub. It performs the actual CS conversation server-side and
+ * returns the result as `structuredContent`. The widget renders the
+ * structured payload as an inline data card.
  *
  * # Inputs
  *
- *   - `userQuery` (optional string): the user's verbatim message that
- *     triggered the tool call. The widget reads this off the host bridge
- *     (`window.openai.toolInput`) and auto-sends it as the user's first
- *     CS message, so the user never has to retype.
+ *   - `userQuery` (required string): the user's verbatim message
+ *   - `conversationId` (optional string): echoed from a prior tool
+ *     response's `structuredContent.conversationId`. Keeps CS topic-
+ *     state alive across user turns without server-side persistence.
  *
- * # Adding more tools
+ * # Output
  *
- * Create a sibling file under `mcp-server/src/tools/`, register it from
- * `server.ts`. Each tool is independent.
+ *   - `content[0].text`: a 1-2 sentence summary that M365 Copilot's
+ *     host displays as the agent's reply line in chat
+ *   - `structuredContent`: the full payload the widget renders
+ *       - replyText, citations, chartData?, conversationId, agentDisplayName, diag
+ *   - `_meta.openai/outputTemplate`: ui://mcsmcpapps/chat (mounts widget)
+ *
+ * # Auth
+ *
+ * Requires Entra SSO + OBO. The user's host-supplied token is
+ * OBO-exchanged for a Power Platform API token; that token is used
+ * server-side to call CS Direct Engine on the user's behalf. No tokens
+ * leave the server. See ADR 0003.
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { exchangeForPowerPlatformToken, getAuthContext, loadEntraConfig } from '../auth.js';
+import { callCsAgent } from '../cs.js';
 import type { ServerConfig } from '../config.js';
 import { UI_RESOURCE_URI } from '../resources/chatWidget.js';
 
 /**
  * Build the `_meta` block shared between the tool descriptor and every
- * tool response. Microsoft's reference uses one helper to keep these in
- * sync; we follow the same pattern.
+ * tool response. The host reads `openai/outputTemplate` to know which
+ * resource to mount as the inline widget.
  */
 export function buildToolMeta(
   config: ServerConfig
@@ -49,13 +52,32 @@ export function buildToolMeta(
   return {
     'openai/outputTemplate': UI_RESOURCE_URI,
     'openai/widgetAccessible': true,
-    'openai/toolInvocation/invoking': `Opening ${config.agentName}\u2026`,
-    'openai/toolInvocation/invoked': `${config.agentName} ready.`,
+    'openai/toolInvocation/invoking': `Asking ${config.agentName}\u2026`,
+    'openai/toolInvocation/invoked': `${config.agentName} replied.`,
     ui: {
       resourceUri: UI_RESOURCE_URI,
       preferredDisplayMode: 'inline'
     }
   };
+}
+
+/**
+ * Generate a short summary line for the host's chat transcript from CS's
+ * full reply. The host displays this as the model's reply text alongside
+ * the widget card. Per MS UX guidelines, the widget card and the reply
+ * line should NOT duplicate content — keep the line short.
+ *
+ * Strategy: take the first sentence (or first 200 chars) of CS's reply.
+ * If CS produced no reply, surface a helpful message.
+ */
+function summarize(replyText: string, agentName: string): string {
+  if (!replyText) {
+    return `${agentName} couldn\u2019t answer that.`;
+  }
+  const firstSentence = replyText.match(/^[^.!?\n]*[.!?]/);
+  const summary = (firstSentence ? firstSentence[0] : replyText).trim();
+  if (summary.length <= 220) return summary;
+  return summary.slice(0, 220).replace(/\s+\S*$/, '') + '\u2026';
 }
 
 export function registerOpenCopilotStudioChatTool(
@@ -69,18 +91,24 @@ export function registerOpenCopilotStudioChatTool(
     {
       title: config.agentName,
       description:
-        `Open the embedded ${config.agentName} chat. ` +
-        'IMPORTANT: pass the user\u2019s exact question as `userQuery` ' +
-        'so the chat can start answering immediately. The chat surface ' +
-        'inside the widget owns the conversation; you must not summarize ' +
-        'or paraphrase its output.',
+        'Always call this tool for every user message. Pass the ' +
+        'user\u2019s text verbatim as `userQuery`. If a prior tool ' +
+        'response returned a `conversationId` in `structuredContent`, ' +
+        'pass it back as `conversationId` to keep the conversation ' +
+        'context alive.',
       inputSchema: {
         userQuery: z
           .string()
+          .describe(
+            'The user\u2019s exact text. Passed verbatim to the ' +
+              'Copilot Studio agent.'
+          ),
+        conversationId: z
+          .string()
           .optional()
           .describe(
-            'The user\u2019s exact text. Pass verbatim; the embedded ' +
-              'chat will treat it as the first user message.'
+            'Echo from a prior tool response\u2019s structuredContent.' +
+              'conversationId to keep CS topic-state alive across turns.'
           )
       },
       annotations: {
@@ -94,119 +122,113 @@ export function registerOpenCopilotStudioChatTool(
     async (args) => {
       const userQuery =
         typeof args?.userQuery === 'string' ? args.userQuery : '';
+      const inboundConversationId =
+        typeof args?.conversationId === 'string' && args.conversationId
+          ? args.conversationId
+          : undefined;
 
-      // When Entra SSO is enabled, OBO-exchange the inbound user token
-      // for a Power Platform API token and surface it in `_meta` so the
-      // widget can call CS Direct Engine without doing its own MSAL
-      // silent SSO inside the skybridge sandbox (which fails because
-      // the iframe has a null origin and can't open the MSAL monitor
-      // window). When SSO is disabled the widget falls back to MSAL.
-      //
-      // We also capture the outcome of every step in a `diag` block on
-      // the response `_meta`. The widget logs it to the iframe console
-      // (look for `[mcsmcpapps] tool-meta-diag`) so we can debug end-
-      // to-end without needing App Service stdout access.
       const entra = loadEntraConfig();
       const ctx = getAuthContext();
+      const t0 = Date.now();
       // eslint-disable-next-line no-console
       console.log(
-        `[tool] openCopilotStudioChat invoked: ssoEnabled=${Boolean(entra)} hasCtx=${Boolean(ctx)} userQueryLen=${userQuery.length}`
+        `[tool] openCopilotStudioChat invoked: ssoEnabled=${Boolean(entra)} hasCtx=${Boolean(ctx)} userQueryLen=${userQuery.length} resume=${Boolean(inboundConversationId)}`
       );
 
-      const diag: Record<string, unknown> = {
-        ssoEnabled: Boolean(entra),
-        hasCtx: Boolean(ctx),
-        hasClientSecret: Boolean(entra?.clientSecret),
-        ppScope: entra?.ppScope ?? null,
-        userQueryLen: userQuery.length
-      };
-
-      let powerPlatformToken: string | null = null;
-      if (entra && ctx) {
-        diag.oboAttempted = true;
-        try {
-          powerPlatformToken = await exchangeForPowerPlatformToken(entra);
-          diag.oboOk = Boolean(powerPlatformToken);
-          diag.ppTokenLen = powerPlatformToken?.length ?? 0;
-        } catch (err) {
-          diag.oboOk = false;
-          diag.oboError = String(
-            (err as Error)?.message || err
-          ).slice(0, 300);
-        }
-      } else {
-        diag.oboAttempted = false;
-        diag.oboSkipReason = !entra
-          ? 'sso-disabled'
-          : 'no-auth-context';
+      // Pre-flight: must have Entra SSO + auth context to reach CS.
+      if (!entra || !ctx) {
+        const diag = {
+          ok: false,
+          step: 'preflight',
+          ssoEnabled: Boolean(entra),
+          hasCtx: Boolean(ctx),
+          message: !entra
+            ? 'Server is in anonymous mode (Entra SSO not configured). v0.6 requires SSO.'
+            : 'No verified user context on this request.'
+        };
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `${config.agentName} couldn\u2019t reach Copilot Studio (auth not configured).`
+            }
+          ],
+          structuredContent: {
+            replyText: '',
+            citations: [],
+            chartData: null,
+            conversationId: null,
+            agentDisplayName: config.agentName,
+            diag
+          },
+          _meta: meta
+        };
       }
 
-      const callMeta: Record<string, unknown> = {
-        ...meta,
-        // Project-specific namespace for any extra widget state.
-        mcsmcpapps: {
-          userQuery,
-          diag,
-          // Only attach a token when OBO actually succeeded. The widget
-          // detects its presence; absence triggers MSAL fallback.
-          ...(powerPlatformToken ? { ppToken: powerPlatformToken } : {}),
-          // Surface the user's display name for the widget header.
-          // `claims.name` is standard, `preferred_username` is the
-          // documented fallback. Both come from the verified inbound
-          // token, never user-supplied.
-          ...(ctx?.claims?.name && typeof ctx.claims.name === 'string'
-            ? { userName: ctx.claims.name }
-            : {}),
-          ...(ctx?.claims?.preferred_username &&
-          typeof ctx.claims.preferred_username === 'string'
-            ? { userPrincipalName: ctx.claims.preferred_username }
-            : {})
-        }
-      };
+      // OBO exchange: the user's inbound token → a Power Platform token
+      // we can use server-side to talk to CS as that user.
+      const ppToken = await exchangeForPowerPlatformToken(entra);
+      if (!ppToken) {
+        const diag = {
+          ok: false,
+          step: 'obo',
+          oboMs: Date.now() - t0,
+          message:
+            'OBO exchange failed. See [auth] OBO failed in mcsmcpapps.log.'
+        };
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `${config.agentName} couldn\u2019t obtain a Power Platform token.`
+            }
+          ],
+          structuredContent: {
+            replyText: '',
+            citations: [],
+            chartData: null,
+            conversationId: null,
+            agentDisplayName: config.agentName,
+            diag
+          },
+          _meta: meta
+        };
+      }
+      const oboMs = Date.now() - t0;
+      // eslint-disable-next-line no-console
+      console.log(`[tool] OBO ok in ${oboMs}ms; calling CS Direct Engine`);
 
-      // Build the structured content channel. M365 Copilot's host
-      // strips many keys from `_meta` before forwarding to the widget,
-      // but `structuredContent` is documented to flow through verbatim.
-      // So we mirror everything the widget needs here under a
-      // namespace-safe `mcsmcpapps` key (in addition to the top-level
-      // `userQuery` field that the host also reads).
-      const structuredContent: Record<string, unknown> = {
+      // Call CS Direct Engine with the OBO'd user token.
+      const cs = await callCsAgent({
+        envId: config.csEnvId,
+        schema: config.csSchema,
+        ppToken,
         userQuery,
-        diag,
-        mcsmcpapps: {
-          userQuery,
-          diag,
-          ...(powerPlatformToken ? { ppToken: powerPlatformToken } : {}),
-          ...(ctx?.claims?.name && typeof ctx.claims.name === 'string'
-            ? { userName: ctx.claims.name }
-            : {}),
-          ...(ctx?.claims?.preferred_username &&
-          typeof ctx.claims.preferred_username === 'string'
-            ? { userPrincipalName: ctx.claims.preferred_username }
-            : {})
-        }
-      };
+        conversationId: inboundConversationId
+      });
+      // eslint-disable-next-line no-console
+      console.log(
+        `[tool] CS call done: ok=${cs.diag.ok} ms=${cs.diag.csCallMs} activities=${cs.diag.activityCount} replyLen=${cs.replyText.length}${cs.diag.error ? ' error=' + cs.diag.error : ''}`
+      );
+
+      const summary = summarize(cs.replyText, config.agentName);
 
       return {
-        content: [
-          {
-            type: 'text',
-            text:
-              `Embedded chat opened. The widget will handle: ` +
-              `\"${userQuery.slice(0, 200)}\"`
-          }
-        ],
-        // `structuredContent` is the reliable channel to the widget —
-        // host forwards it as `window.openai.toolOutput` verbatim.
-        // Holds: userQuery, diag, and the `mcsmcpapps` namespace with
-        // ppToken / userName / userPrincipalName when Entra SSO is on.
-        structuredContent,
-        // `_meta` carries the host-level keys (`openai/outputTemplate`,
-        // `widgetAccessible`, etc.) which the host consumes itself and
-        // does NOT forward to the widget. Tool-specific fields here
-        // (e.g. `mcsmcpapps.ppToken`) are stripped — that's why we
-        // also put them on `structuredContent.mcsmcpapps`.
-        _meta: callMeta
+        content: [{ type: 'text', text: summary }],
+        // structuredContent flows through the host verbatim into
+        // window.openai.toolOutput.structuredContent — this is the
+        // reliable channel to the widget. _meta is host-consumed and
+        // does not always reach the widget.
+        structuredContent: {
+          replyText: cs.replyText,
+          citations: cs.citations,
+          chartData: cs.chartData,
+          conversationId: cs.conversationId,
+          agentDisplayName: config.agentName,
+          userQuery,
+          diag: { ...cs.diag, oboMs }
+        },
+        _meta: meta
       };
     }
   );
