@@ -107,12 +107,12 @@ export function registerOpenCopilotStudioChatTool(
           ),
         conversationId: z
           .string()
-          .optional()
           .describe(
-            'REQUIRED on every turn after the first. Echo the value ' +
-              'of `structuredContent.conversationId` from the prior ' +
-              'tool response. Omit only on the very first call of a ' +
-              'fresh conversation. Omitting it on follow-ups discards ' +
+            'Echo of `structuredContent.conversationId` from the ' +
+              'prior tool response. Pass an empty string ("") on the ' +
+              'very first call of a brand-new conversation. ' +
+              'On every subsequent call, pass the exact value the ' +
+              'last response returned \u2014 omitting it discards CS ' +
               'topic state and is almost always wrong.'
           )
       },
