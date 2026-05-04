@@ -30,7 +30,7 @@ import {
   type AccountInfo
 } from '@azure/msal-browser';
 import { Widget } from './Widget';
-import { subscribePpToken, subscribeToolDiag } from './host-bridge';
+import { isInsideSkybridge, subscribePpToken, subscribeToolDiag } from './host-bridge';
 
 /**
  * Boot trace bridge.
@@ -131,8 +131,18 @@ function App() {
   // hasn't delivered `toolOutput` yet. Wait 4 seconds before assuming
   // legacy mode. Long enough for the host to deliver, short enough that
   // the standalone SWA channel still feels snappy.
+  //
+  // Inside skybridge, we NEVER fall back to MSAL — login.microsoftonline.com
+  // is unreachable from the null-origin sandbox and only causes a
+  // confusing `monitor_window_timeout` error. Instead we wait
+  // indefinitely for the host token; if it never arrives, the widget
+  // shows "Connecting…" until the user closes the agent surface.
   useEffect(() => {
     if (hostTokenReceived) return;
+    if (isInsideSkybridge()) {
+      trace('skybridge-detected-msal-gate-stays-closed');
+      return; // never open the MSAL gate in skybridge
+    }
     const t = window.setTimeout(() => {
       trace('msal-gate-opened-after-timeout');
       setMsalGateOpen(true);
