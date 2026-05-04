@@ -218,7 +218,7 @@ export function entraAuthMiddleware(
       const ctx: AuthContext = { claims: payload, inboundToken: token, headers };
       // eslint-disable-next-line no-console
       console.log(
-        `[auth] token verified (sub=${payload.sub ?? '?'}, oid=${payload.oid ?? '?'})`
+        `[auth] token verified (sub=${String(payload.sub ?? '?').slice(0, 8)}, oid=${String(payload.oid ?? '?').slice(0, 8)}, m365thread=${(headers['x-microsoft-ai-conversationid'] ?? 'none').slice(0, 8)}, m365req=${(headers['x-requestid'] ?? 'none').slice(0, 8)})`
       );
       // Set both AsyncLocalStorage AND the module-level fallback. The
       // module-level one is cleared on response close.

@@ -213,10 +213,24 @@ function ErrorState({ payload }: { payload: ToolPayload }) {
 function AdaptiveCardBlock({ card }: { card: AdaptiveCardPayload }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [hasSubmit, setHasSubmit] = useState<boolean>(false);
 
   useEffect(() => {
     if (!ref.current) return;
     setError(null);
+    // Cheap pre-scan of the JSON for interactive inputs / submit actions
+    // so we can show the v0.7.0 "forms in v0.7.1" banner without parsing
+    // twice. Look for any input/action.submit pattern in the serialized
+    // card. False positives are fine; the banner is informational.
+    try {
+      const serialized = JSON.stringify(card).toLowerCase();
+      setHasSubmit(
+        serialized.includes('action.submit') ||
+          /"type"\s*:\s*"input\./i.test(JSON.stringify(card))
+      );
+    } catch {
+      setHasSubmit(false);
+    }
     try {
       const ac = new AdaptiveCards.AdaptiveCard();
       // Minimal HostConfig honoring the widget's CSS custom props.
@@ -279,7 +293,28 @@ function AdaptiveCardBlock({ card }: { card: AdaptiveCardPayload }) {
       </div>
     );
   }
-  return <div className="mcs-ac" ref={ref} />;
+  return (
+    <div>
+      {hasSubmit ? (
+        <div
+          className="mcs-banner"
+          style={{
+            fontSize: 12,
+            color: 'var(--muted, #6b6b6b)',
+            background: 'var(--surface, #f5f5f5)',
+            border: '1px solid var(--border, #e0e0e0)',
+            borderRadius: 4,
+            padding: '6px 10px',
+            marginBottom: 8
+          }}
+        >
+          Interactive form inputs are coming in v0.7.1. Buttons that open
+          a URL work today; Submit buttons currently do not post back.
+        </div>
+      ) : null}
+      <div className="mcs-ac" ref={ref} />
+    </div>
+  );
 }
 
 /**
