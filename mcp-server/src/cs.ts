@@ -291,6 +291,14 @@ function extractSuggestedActions(
 /** What we collect per turn. */
 interface TurnState {
   replyParts: string[];
+  /**
+   * Interim "I'm working on it" placeholder text (e.g. "Thanks, I'll
+   * get that for you") that CS sometimes sends BEFORE doing a long
+   * tool call / generative step. We capture but do NOT include in the
+   * final replyText — including it would concatenate the placeholder
+   * with the real answer in the widget. v0.7.2b+.
+   */
+  interimText: string[];
   citations: Citation[];
   chart: ChartData | null;
   adaptiveCards: AdaptiveCard[];
@@ -304,6 +312,20 @@ interface TurnState {
  * Iterate a CS streaming reply; collect text + citations + chart and
  * exit on `EndOfConversation`. Per the MS sample, this is the canonical
  * end-of-turn signal.
+ *
+ * # Interim-message handling (v0.7.2b)
+ *
+ * CS topics that do long-running work commonly send an interim
+ * message first: `"Thanks, I'll get that for you"` — then 30-120 s
+ * later, the real answer. The interim message is marked with
+ * `inputHint: "ignoringInput"`, which signals "the user shouldn't
+ * type yet because more is coming." We use that signal to filter the
+ * placeholder OUT of `replyText` so it doesn't concatenate with the
+ * real answer in the widget.
+ *
+ * If `inputHint` is missing (older topics, custom adapters), we fall
+ * back to keeping all messages — better to show a duplicate than to
+ * drop the real answer.
  */
 async function consumeTurn(
   source: AsyncIterable<Activity>,
@@ -316,11 +338,12 @@ async function consumeTurn(
     const a = activity as unknown as {
       type?: string;
       text?: string;
+      inputHint?: string;
       conversation?: { id?: string };
     };
     // eslint-disable-next-line no-console
     console.log(
-      `[cs] activity #${state.activityCount} type=${a.type ?? '?'} textLen=${typeof a.text === 'string' ? a.text.length : 0}${a.conversation?.id ? ' conv=' + String(a.conversation.id).slice(0, 8) : ''}`
+      `[cs] activity #${state.activityCount} type=${a.type ?? '?'} textLen=${typeof a.text === 'string' ? a.text.length : 0}${a.inputHint ? ' hint=' + a.inputHint : ''}${a.conversation?.id ? ' conv=' + String(a.conversation.id).slice(0, 8) : ''}`
     );
     if (a.conversation?.id) state.conversationId = a.conversation.id;
 
@@ -335,7 +358,13 @@ async function consumeTurn(
     }
 
     if (a.type === ActivityTypes.Message && typeof a.text === 'string' && a.text.trim()) {
-      state.replyParts.push(a.text);
+      if (a.inputHint === 'ignoringInput') {
+        // Placeholder: "Thanks, I'll get that for you", "Working on it…".
+        // CS will send the real answer in a later activity.
+        state.interimText.push(a.text);
+      } else {
+        state.replyParts.push(a.text);
+      }
     }
 
     extractCitations(activity, state.citations);
@@ -382,6 +411,7 @@ export async function callCsAgent(
 
     const state: TurnState = {
       replyParts: [],
+      interimText: [],
       citations: result.citations,
       chart: null,
       adaptiveCards: result.adaptiveCards,
@@ -476,10 +506,18 @@ export async function callCsAgent(
     );
     // eslint-disable-next-line no-console
     console.log(
-      `[cs] sendActivity done in ${Date.now() - sendStartedAt}ms; replyChunks=${state.replyParts.length} eoc=${state.sawEndOfConversation} timedOut=${result.diag.timedOut}`
+      `[cs] sendActivity done in ${Date.now() - sendStartedAt}ms; replyChunks=${state.replyParts.length} interimChunks=${state.interimText.length} eoc=${state.sawEndOfConversation} timedOut=${result.diag.timedOut}`
     );
 
-    result.replyText = state.replyParts.join('\n').trim();
+    // Final answer prefers `replyParts` (messages with no inputHint /
+    // acceptingInput). If those are empty, fall back to interim text
+    // (some topics never set inputHint at all; better to show the
+    // placeholder than to fail silently).
+    const finalText =
+      state.replyParts.length > 0
+        ? state.replyParts.join('\n').trim()
+        : state.interimText.join('\n').trim();
+    result.replyText = finalText;
     result.chartData = state.chart;
     result.conversationId = state.conversationId;
     result.diag.activityCount = state.activityCount;
