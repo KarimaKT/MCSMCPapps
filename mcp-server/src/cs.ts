@@ -78,14 +78,29 @@ export interface ChartData {
   series?: Array<{ label?: string; value: number }>;
 }
 
+/**
+ * An Adaptive Card payload as emitted by the CS agent. Verbatim JSON
+ * from `activity.attachments[i].content` where the contentType is
+ * `application/vnd.microsoft.card.adaptive`. We do not validate the
+ * schema server-side; the widget renderer handles malformed cards
+ * with an inline error placeholder.
+ */
+export type AdaptiveCard = Record<string, unknown>;
+
 export interface CallCsAgentResult {
   replyText: string;
   citations: Citation[];
   chartData: ChartData | null;
+  /**
+   * Adaptive Cards extracted from CS reply activities, in arrival order.
+   * Empty when the reply has no AC attachments. v0.7.0+.
+   */
+  adaptiveCards: AdaptiveCard[];
   conversationId: string | null;
   diag: {
     csCallMs: number;
     activityCount: number;
+    adaptiveCardCount: number;
     timedOut: boolean;
     sawEndOfConversation: boolean;
     ok: boolean;
@@ -182,11 +197,43 @@ function extractChart(activity: Activity): ChartData | null {
   return null;
 }
 
+/**
+ * Extract every Adaptive Card attachment from a CS activity into
+ * `into`. Verbatim JSON; no validation. v0.7.0+.
+ *
+ * CS emits AC attachments under `application/vnd.microsoft.card.adaptive`.
+ * One activity may carry multiple cards (carousel).
+ *
+ * Reference: spec 0002, ADR 0004.
+ */
+function extractAdaptiveCards(
+  activity: Activity,
+  into: AdaptiveCard[]
+): void {
+  const atts = (activity as unknown as {
+    attachments?: Array<{
+      contentType?: string;
+      content?: unknown;
+    }>;
+  }).attachments;
+  if (!Array.isArray(atts)) return;
+  for (const a of atts) {
+    if (
+      a?.contentType === 'application/vnd.microsoft.card.adaptive' &&
+      a.content &&
+      typeof a.content === 'object'
+    ) {
+      into.push(a.content as AdaptiveCard);
+    }
+  }
+}
+
 /** What we collect per turn. */
 interface TurnState {
   replyParts: string[];
   citations: Citation[];
   chart: ChartData | null;
+  adaptiveCards: AdaptiveCard[];
   conversationId: string | null;
   activityCount: number;
   sawEndOfConversation: boolean;
@@ -233,6 +280,7 @@ async function consumeTurn(
     extractCitations(activity, state.citations);
     const chart = extractChart(activity);
     if (chart) state.chart = chart;
+    extractAdaptiveCards(activity, state.adaptiveCards);
   }
 }
 
@@ -246,10 +294,12 @@ export async function callCsAgent(
     replyText: '',
     citations: [],
     chartData: null,
+    adaptiveCards: [],
     conversationId: params.conversationId ?? null,
     diag: {
       csCallMs: 0,
       activityCount: 0,
+      adaptiveCardCount: 0,
       timedOut: false,
       sawEndOfConversation: false,
       ok: false
@@ -270,6 +320,7 @@ export async function callCsAgent(
       replyParts: [],
       citations: result.citations,
       chart: null,
+      adaptiveCards: result.adaptiveCards,
       conversationId: result.conversationId,
       activityCount: 0,
       sawEndOfConversation: false
@@ -360,9 +411,10 @@ export async function callCsAgent(
     result.chartData = state.chart;
     result.conversationId = state.conversationId;
     result.diag.activityCount = state.activityCount;
+    result.diag.adaptiveCardCount = state.adaptiveCards.length;
     result.diag.sawEndOfConversation = state.sawEndOfConversation;
     result.diag.csCallMs = Date.now() - start;
-    result.diag.ok = result.replyText.length > 0;
+    result.diag.ok = result.replyText.length > 0 || state.adaptiveCards.length > 0;
     if (!result.diag.ok && !result.diag.error) {
       result.diag.error = result.diag.timedOut
         ? 'CS stream timed out before reply'

@@ -40,7 +40,13 @@ import { exchangeForPowerPlatformToken, getAuthContext, loadEntraConfig } from '
 import { callCsAgent } from '../cs.js';
 import type { ServerConfig } from '../config.js';
 import { UI_RESOURCE_URI } from '../resources/chatWidget.js';
-import { getCachedPpToken, setCachedPpToken } from '../caches.js';
+import {
+  getCachedPpToken,
+  setCachedPpToken,
+  getCachedConversationId,
+  setCachedConversationId,
+  clearCachedConversationId
+} from '../caches.js';
 
 /**
  * Build the `_meta` block shared between the tool descriptor and every
@@ -129,31 +135,37 @@ export function registerOpenCopilotStudioChatTool(
       const entra = loadEntraConfig();
       const ctx = getAuthContext();
       const t0 = Date.now();
-      // Use the user's Entra `oid` for the PP token cache only. The
-      // CS conversation id is NOT cached server-side: we deliberately
-      // rely on the host echoing structuredContent.conversationId back
-      // as the conversationId argument. That gives us the right
-      // session semantics:
-      //   - Same M365 Copilot chat thread, follow-up turn:
-      //     host has the prior tool output in context → echoes
-      //     conversationId → CS conversation continues.
-      //   - User starts a NEW chat thread in M365 Copilot:
-      //     host has nothing to echo → no conversationId → we open a
-      //     fresh CS conversation. This matches user intent: "MCS
-      //     sessions should restart whenever the M365 Copilot DA
-      //     session restarts."
-      // The downside is that if the host model forgets to echo within
-      // a single thread (model drift, context truncation), CS topic
-      // state is lost mid-thread. The DA instructions hammer this
-      // rule hard, but ultimate fix is FR 2.8 (host-managed threadId).
+      // Identity (token cache key) and host-thread (conversation cache
+      // key). M365 Copilot sends a stable per-thread id on the
+      // `x-microsoft-ai-conversationid` header on every call (verified
+      // 2026-05-04 from production logs). Keying the conversation cache
+      // on (oid + threadId) gives us:
+      //   - Same M365 thread, follow-up turn → cache hit → reuse CS
+      //     conversation → topic state continuity ✓
+      //   - User starts a NEW M365 thread → different threadId →
+      //     fresh CS conversation ✓
+      //   - Different user → different oid → isolated ✓
+      // This replaces the v0.6.4 host-echo-only strategy, which the host
+      // LLM dropped on every turn (hostEchoedConv=false in 100% of logs).
       const oid =
         ctx && typeof ctx.claims.oid === 'string' ? ctx.claims.oid : null;
+      const hostThreadId =
+        ctx && typeof ctx.headers['x-microsoft-ai-conversationid'] === 'string'
+          ? ctx.headers['x-microsoft-ai-conversationid']
+          : null;
+      const convCacheKey = oid && hostThreadId ? `${oid}|${hostThreadId}` : null;
+      const cachedConvId = convCacheKey
+        ? getCachedConversationId(convCacheKey)
+        : null;
 
-      const effectiveConvId = inboundConversationId;
+      // Effective convId: prefer host-echoed (rare) over our header-keyed
+      // cache. Either way, both should converge on the same CS conv id
+      // within a thread.
+      const effectiveConvId = inboundConversationId ?? cachedConvId ?? undefined;
 
       // eslint-disable-next-line no-console
       console.log(
-        `[tool] openCopilotStudioChat invoked: ssoEnabled=${Boolean(entra)} hasCtx=${Boolean(ctx)} userQueryLen=${userQuery.length} hostEchoedConv=${Boolean(inboundConversationId)} resume=${Boolean(effectiveConvId)}`
+        `[tool] openCopilotStudioChat invoked: ssoEnabled=${Boolean(entra)} hasCtx=${Boolean(ctx)} userQueryLen=${userQuery.length} hostEchoedConv=${Boolean(inboundConversationId)} hostThread=${hostThreadId ? hostThreadId.slice(0, 8) : 'none'} convCache=${cachedConvId ? 'hit' : 'miss'} resume=${Boolean(effectiveConvId)}`
       );
 
       // Pre-flight: must have Entra SSO + auth context to reach CS.
@@ -251,9 +263,19 @@ export function registerOpenCopilotStudioChatTool(
         `[tool] CS call done: ok=${cs.diag.ok} ms=${cs.diag.csCallMs} activities=${cs.diag.activityCount} replyLen=${cs.replyText.length}${cs.diag.error ? ' error=' + cs.diag.error : ''}`
       );
 
-      // No conversation-cache write: see the comment above
-      // `effectiveConvId` for why we deliberately do not persist
-      // CS conversation ids server-side.
+      // Conversation-cache update keyed on (oid, hostThreadId).
+      // - On success: store the live CS conv id so the next turn in
+      //   this M365 thread reuses it.
+      // - On failure with a cached id: drop it so the next turn opens
+      //   a fresh CS conversation (likely the cached one expired
+      //   server-side).
+      if (convCacheKey) {
+        if (cs.diag.ok && cs.conversationId) {
+          setCachedConversationId(convCacheKey, cs.conversationId);
+        } else if (cachedConvId && !cs.diag.ok) {
+          clearCachedConversationId(convCacheKey);
+        }
+      }
 
       // Silent-dispatcher pattern. The widget displays the reply via
       // `structuredContent`; we don't want the host model to narrate or
@@ -278,6 +300,7 @@ export function registerOpenCopilotStudioChatTool(
           replyText: cs.replyText,
           citations: cs.citations,
           chartData: cs.chartData,
+          adaptiveCards: cs.adaptiveCards,
           conversationId: cs.conversationId,
           agentDisplayName: config.agentName,
           userQuery,
@@ -285,7 +308,9 @@ export function registerOpenCopilotStudioChatTool(
             ...cs.diag,
             oboMs,
             oboCacheHit,
+            convCacheHit: Boolean(cachedConvId),
             hostEchoedConv: Boolean(inboundConversationId),
+            hostThreadId: hostThreadId ?? null,
             totalMs: Date.now() - t0
           }
         },

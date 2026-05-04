@@ -26,8 +26,14 @@
  */
 
 import * as React from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import * as ReactDOM from 'react-dom';
+// AdaptiveCards renderer (~120 KB gz). Spec 0002, ADR 0004.
+import * as AdaptiveCards from 'adaptivecards';
+// Lightweight Markdown for `replyText` (CS often emits markdown).
+import { marked } from 'marked';
+// Sanitize markdown HTML before injection.
+import DOMPurify from 'dompurify';
 
 interface Citation { title: string; url: string }
 interface ChartData {
@@ -37,10 +43,15 @@ interface ChartData {
   deltaText?: string;
   series?: Array<{ label?: string; value: number }>;
 }
+/** Verbatim Adaptive Card JSON from CS. Spec 0002. */
+type AdaptiveCardPayload = Record<string, unknown>;
+
 interface ToolPayload {
   replyText: string;
   citations: Citation[];
   chartData: ChartData | null;
+  /** v0.7.0+: Adaptive Cards extracted from CS reply activities. */
+  adaptiveCards?: AdaptiveCardPayload[];
   conversationId: string | null;
   agentDisplayName: string;
   userQuery?: string;
@@ -191,6 +202,123 @@ function ErrorState({ payload }: { payload: ToolPayload }) {
   );
 }
 
+/**
+ * Render an Adaptive Card from CS into a DOM node. Per spec 0002 + ADR 0004:
+ *  - We trust CS's JSON (no client-side schema validation)
+ *  - Action.OpenUrl → `window.openai.openExternal`
+ *  - Action.Submit + form inputs render but do nothing in v0.7.0
+ *    (v0.7.1 spec 0003 will wire `submitAdaptiveCardAction`)
+ *  - Parse failure → inline error placeholder; rest of widget keeps rendering
+ */
+function AdaptiveCardBlock({ card }: { card: AdaptiveCardPayload }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    setError(null);
+    try {
+      const ac = new AdaptiveCards.AdaptiveCard();
+      // Minimal HostConfig honoring the widget's CSS custom props.
+      ac.hostConfig = new AdaptiveCards.HostConfig({
+        spacing: { small: 4, default: 8, medium: 16, large: 24, extraLarge: 32, padding: 12 },
+        separator: { lineThickness: 1, lineColor: 'var(--border, #e0e0e0)' },
+        supportsInteractivity: true,
+        fontFamily:
+          'var(--font, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif)',
+        fontSizes: { small: 12, default: 14, medium: 16, large: 18, extraLarge: 22 },
+        fontWeights: { lighter: 200, default: 400, bolder: 600 },
+        containerStyles: {
+          default: {
+            backgroundColor: 'transparent',
+            foregroundColors: {
+              default: { default: 'var(--text, #242424)', subtle: 'var(--muted, #6b6b6b)' },
+              accent: { default: 'var(--accent, #0f6cbd)', subtle: 'var(--accent, #0f6cbd)' },
+              good: { default: '#107c10', subtle: '#107c10' },
+              warning: { default: '#bc4b09', subtle: '#bc4b09' },
+              attention: { default: '#c50f1f', subtle: '#c50f1f' }
+            }
+          }
+        },
+        actions: {
+          maxActions: 5,
+          spacing: 'default',
+          buttonSpacing: 8,
+          actionsOrientation: 'horizontal',
+          actionAlignment: 'left'
+        }
+      });
+      ac.onExecuteAction = (action) => {
+        if (action instanceof AdaptiveCards.OpenUrlAction && action.url) {
+          host()?.openExternal?.({ href: action.url });
+          return;
+        }
+        if (action instanceof AdaptiveCards.SubmitAction) {
+          // v0.7.1 (spec 0003) will wire this to `submitAdaptiveCardAction`.
+          // For v0.7.0 we deliberately no-op so static cards render safely
+          // without false-positive submit handlers.
+          // eslint-disable-next-line no-console
+          console.log('[widget] AC Submit clicked (v0.7.0 no-op)', action.data);
+          return;
+        }
+      };
+      ac.parse(card);
+      const rendered = ac.render();
+      ref.current.innerHTML = '';
+      if (rendered) ref.current.appendChild(rendered);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+    }
+  }, [card]);
+
+  if (error) {
+    return (
+      <div className="mcs-error" style={{ marginTop: 8 }}>
+        <small>Card render failed: {error}</small>
+      </div>
+    );
+  }
+  return <div className="mcs-ac" ref={ref} />;
+}
+
+/**
+ * Render `replyText` as Markdown. CS often emits markdown bullets,
+ * bold, links. Sanitized via DOMPurify before injection.
+ */
+function MarkdownText({ text }: { text: string }) {
+  const html = React.useMemo(() => {
+    try {
+      const raw = marked.parse(text, { async: false }) as string;
+      return DOMPurify.sanitize(raw, { ADD_ATTR: ['target', 'rel'] });
+    } catch {
+      // Fall back to plain text if marked fails.
+      return text.replace(/[<>&]/g, (c) =>
+        c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&amp;'
+      );
+    }
+  }, [text]);
+  return (
+    <div
+      className="mcs-md"
+      style={{ whiteSpace: 'normal' }}
+      // eslint-disable-next-line react/no-danger
+      dangerouslySetInnerHTML={{ __html: html }}
+      onClick={(e) => {
+        // Route in-card link clicks through openExternal for sandbox safety.
+        const t = e.target as HTMLElement;
+        if (t && t.tagName === 'A') {
+          const href = t.getAttribute('href');
+          if (href) {
+            e.preventDefault();
+            host()?.openExternal?.({ href });
+          }
+        }
+      }}
+    />
+  );
+}
+
 function App() {
   const [payload, setPayload] = useState<ToolPayload | null>(() => readPayload());
   const [theme, setTheme] = useState<'light' | 'dark'>(() =>
@@ -254,27 +382,89 @@ function App() {
     return <div className="mcs-pending">Loading{userQuery ? ' “' + userQuery + '”' : ''}…</div>;
   }
 
-  const ok = payload.diag?.ok !== false && payload.replyText.length > 0;
+  const ok = payload.diag?.ok !== false && (payload.replyText.length > 0 || (payload.adaptiveCards?.length ?? 0) > 0);
   if (!ok) {
     return <ErrorState payload={payload} />;
   }
 
   const chart = payload.chartData;
+  const cards = payload.adaptiveCards ?? [];
+  const isFullscreen = host()?.displayMode === 'fullscreen';
   const onOpenFullscreen = () => {
     host()?.requestDisplayMode?.({ mode: 'fullscreen' });
+  };
+  const onCopy = async () => {
+    // Copy the rendered text. Falls back gracefully if clipboard API
+    // is blocked by the sandbox (rare but possible).
+    try {
+      const txt = payload.replyText ?? '';
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(txt);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = txt;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+    } catch {
+      // ignore — best effort
+    }
+  };
+  const onPrint = () => {
+    // window.print works inside the skybridge iframe and prints just
+    // the iframe contents — exactly the analyst canvas. Browser handles
+    // the "Save as PDF" destination from the print dialog.
+    try {
+      window.print();
+    } catch {
+      // ignore
+    }
   };
 
   return (
     <div className="mcs-card">
+      {isFullscreen ? (
+        <div
+          className="mcs-toolbar"
+          style={{
+            display: 'flex',
+            gap: 8,
+            justifyContent: 'flex-end',
+            marginBottom: 8,
+            position: 'sticky',
+            top: 0,
+            background: 'var(--bg, #fff)',
+            paddingBottom: 8,
+            borderBottom: '1px solid var(--border, #e0e0e0)',
+            zIndex: 1
+          }}
+        >
+          <button className="mcs-btn" onClick={onCopy} aria-label="Copy answer text">
+            Copy
+          </button>
+          <button className="mcs-btn" onClick={onPrint} aria-label="Print or save as PDF">
+            Print / Save as PDF
+          </button>
+        </div>
+      ) : null}
       {chart && chart.kind === 'stat' ? <StatCard chart={chart} /> : null}
       {chart && chart.kind === 'compare' ? <CompareCard chart={chart} /> : null}
       {chart && chart.kind === 'trend' ? <StatCard chart={chart} /> : null}
-      {!chart && payload.replyText ? (
-        <div style={{ whiteSpace: 'pre-wrap' }}>{payload.replyText}</div>
+      {payload.replyText ? <MarkdownText text={payload.replyText} /> : null}
+      {cards.length > 0 ? (
+        <div className="mcs-cards" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: chart || payload.replyText ? 12 : 0 }}>
+          {cards.map((c, i) => (
+            <AdaptiveCardBlock key={i} card={c} />
+          ))}
+        </div>
       ) : null}
       <CitationsList items={payload.citations ?? []} />
       <div className="mcs-actions">
-        {host()?.requestDisplayMode ? (
+        {!isFullscreen && host()?.requestDisplayMode ? (
           <button className="mcs-btn primary" onClick={onOpenFullscreen}>
             Open analyst
           </button>
