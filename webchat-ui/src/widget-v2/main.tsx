@@ -658,13 +658,27 @@ function App() {
       {chart && chart.kind === 'stat' ? <StatCard chart={chart} /> : null}
       {chart && chart.kind === 'compare' ? <CompareCard chart={chart} /> : null}
       {chart && chart.kind === 'trend' ? <StatCard chart={chart} /> : null}
-      {payload.replyText ? <MarkdownText text={payload.replyText} /> : null}
-      {cards.length > 0 ? (
-        <div className="mcs-cards" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: chart || payload.replyText ? 12 : 0 }}>
-          {cards.map((c, i) => (
-            <AdaptiveCardBlock key={i} card={c} />
-          ))}
+      {/*
+        Reply body wrapped in `.mcs-preview-clip`. CSS caps height in
+        inline mode (~280px with fade-out) so the inline card stays
+        compact and the "Open analyst" button is visible without
+        forcing the user to scroll the iframe AND the M365 Copilot
+        chat. Fullscreen mode removes the cap.
+      */}
+      {payload.replyText || cards.length > 0 ? (
+        <div className="mcs-preview-clip">
+          {payload.replyText ? <MarkdownText text={payload.replyText} /> : null}
+          {cards.length > 0 ? (
+            <div className="mcs-cards" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: chart || payload.replyText ? 12 : 0 }}>
+              {cards.map((c, i) => (
+                <AdaptiveCardBlock key={i} card={c} />
+              ))}
+            </div>
+          ) : null}
         </div>
+      ) : null}
+      {!isFullscreen && (payload.replyText.length > 600 || cards.length > 0) ? (
+        <div className="mcs-preview-meta">Open the analyst to read the full answer.</div>
       ) : null}
       <CitationsList items={payload.citations ?? []} />
       <SuggestedActionsRow

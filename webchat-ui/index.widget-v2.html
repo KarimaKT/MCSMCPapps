@@ -130,8 +130,7 @@
       /* ---------- Markdown rendering ---------- */
       .mcs-md { line-height: 1.6; font-size: 14px; }
       .mcs-md > *:first-child { margin-top: 0; }
-      .mcs-md > *:last-child { margin-bottom: 0; }
-      .mcs-md p { margin: 0.6em 0; }
+      .mcs-md > *:last-child { margin-bottom: 0; }      .mcs-md p { margin: 0.6em 0; }
       .mcs-md h1, .mcs-md h2, .mcs-md h3, .mcs-md h4 {
         margin: 1.1em 0 0.5em;
         line-height: 1.25;
@@ -201,6 +200,46 @@
         background: var(--accent) !important;
         color: var(--accent-fg) !important;
         border-color: var(--accent) !important;
+      }
+
+      /* ---------- Inline preview clip (small chat card) ----------
+         The default inline card shows the FULL reply, which is too tall
+         for long answers — user has to scroll the iframe AND M365 Copilot
+         to reach the Open button. We cap the inline body at ~280 px with
+         a soft fade-out, and rely on the Open button to switch to
+         fullscreen for the full reading experience. v0.7.2d. */
+      [data-display='inline'] .mcs-preview-clip {
+        max-height: 280px;
+        overflow: hidden;
+        position: relative;
+      }
+      [data-display='inline'] .mcs-preview-clip::after {
+        content: '';
+        position: absolute;
+        left: 0; right: 0; bottom: 0;
+        height: 80px;
+        background: linear-gradient(
+          to bottom,
+          rgba(255, 255, 255, 0) 0%,
+          var(--card-bg) 100%
+        );
+        pointer-events: none;
+      }
+      [data-theme='dark'] [data-display='inline'] .mcs-preview-clip::after {
+        background: linear-gradient(
+          to bottom,
+          rgba(43, 43, 43, 0) 0%,
+          var(--card-bg) 100%
+        );
+      }
+      [data-display='inline'] .mcs-preview-meta {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 6px;
+      }
+      [data-display='fullscreen'] .mcs-preview-clip {
+        max-height: none;
+        overflow: visible;
       }
 
       /* ---------- Fullscreen analyst canvas ---------- */
