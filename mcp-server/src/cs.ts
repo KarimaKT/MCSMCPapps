@@ -119,18 +119,26 @@ export interface CallCsAgentResult {
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 /**
- * Drain an async iterable of activities with an overall timeout.
- * Yields each activity until the iterable ends or the timer fires.
+ * Drain an async iterable while a `keepGoing()` predicate returns true,
+ * with an overall hard timeout. Yields each value until either:
+ *   - the iterable ends naturally
+ *   - `keepGoing()` returns false after at least one value
+ *   - the hard timeout fires
+ *
+ * The hard timeout is a backstop. The expected exit is `keepGoing` going
+ * false (e.g. "we have what we need").
  */
-async function* drainWithTimeout<T>(
+async function* drainWhile<T>(
   source: AsyncIterable<T>,
-  timeoutMs: number,
+  hardTimeoutMs: number,
+  keepGoing: () => boolean,
   onTimeout: () => void
 ): AsyncIterable<T> {
   const iter = source[Symbol.asyncIterator]();
   const start = Date.now();
   while (true) {
-    const remaining = timeoutMs - (Date.now() - start);
+    if (!keepGoing()) return;
+    const remaining = hardTimeoutMs - (Date.now() - start);
     if (remaining <= 0) {
       onTimeout();
       return;
@@ -139,7 +147,10 @@ async function* drainWithTimeout<T>(
     const winner = await Promise.race([
       next,
       new Promise<{ value: undefined; done: true; __timeout: true }>((resolve) =>
-        setTimeout(() => resolve({ value: undefined, done: true, __timeout: true }), remaining)
+        setTimeout(
+          () => resolve({ value: undefined, done: true, __timeout: true }),
+          remaining
+        )
       )
     ]);
     if ((winner as { __timeout?: boolean }).__timeout) {
@@ -234,42 +245,64 @@ export async function callCsAgent(
     };
     const client = new CopilotStudioClient(settings, params.ppToken);
 
-    // Open or resume the conversation. The SDK exposes streaming
-    // iterables for both. We drain to completion (or timeout).
     const replyParts: string[] = [];
+    let lastBotMessageAt = 0;
     const handleActivity = (a: CsActivity): void => {
       result.diag.activityCount += 1;
+      // eslint-disable-next-line no-console
+      console.log(
+        `[cs] activity #${result.diag.activityCount} type=${a.type ?? '?'} textLen=${typeof a.text === 'string' ? a.text.length : 0}${a.conversation?.id ? ' convId=' + String(a.conversation.id).slice(0, 8) : ''}`
+      );
       if (a.conversation?.id) result.conversationId = a.conversation.id;
-      if (typeof a.text === 'string' && a.text) replyParts.push(a.text);
+      if (a.type === 'message' && typeof a.text === 'string' && a.text.trim()) {
+        replyParts.push(a.text);
+        lastBotMessageAt = Date.now();
+      }
       extractCitations(a, result.citations);
       const chart = extractChart(a);
       if (chart) result.chartData = chart;
     };
 
+    const hardTimeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const startConversationCapMs = 3000; // we only need the conversation id
+    const idleAfterReplyMs = 800; // wait this long for follow-on chunks
+
     let opened = false;
     if (!params.conversationId) {
-      // Brand-new conversation: drain the start stream first.
+      // Brand-new conversation: drain the start stream just long enough
+      // to get the conversation id. Bot greeting (if any) is captured
+      // but we don't wait for it — that's not the user's question yet.
+      const startedAt = Date.now();
       const stream = client.startConversationStreaming() as AsyncIterable<CsActivity>;
-      for await (const activity of drainWithTimeout(
+      for await (const activity of drainWhile(
         stream,
-        params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        startConversationCapMs,
+        () => !result.conversationId, // exit as soon as we have a conv id
         () => {
-          result.diag.timedOut = true;
+          // start-stream timeout is informational only; not fatal here
+          // eslint-disable-next-line no-console
+          console.log('[cs] startConversationStreaming cap hit (informational)');
         }
       )) {
         handleActivity(activity);
       }
+      // eslint-disable-next-line no-console
+      console.log(
+        `[cs] start stream done in ${Date.now() - startedAt}ms; convId=${result.conversationId ? String(result.conversationId).slice(0, 12) + '...' : 'none'}`
+      );
       opened = true;
-      if (result.diag.timedOut) {
-        result.replyText = replyParts.join('\n').trim();
+      if (!result.conversationId) {
         result.diag.csCallMs = Date.now() - start;
         result.diag.ok = false;
-        result.diag.error = 'CS startConversationStreaming timed out';
+        result.diag.error = 'CS did not return a conversation id';
         return result;
       }
     }
 
-    // Now send the user's activity and drain the response.
+    // Send the user's activity and drain until we have a bot reply
+    // (type=message with text) and then wait `idleAfterReplyMs` for any
+    // follow-on chunks. Hard timeout backstops at hardTimeoutMs total.
+    const sendStartedAt = Date.now();
     const userActivity = {
       type: 'message',
       from: { id: 'user', role: 'user' },
@@ -282,22 +315,32 @@ export async function callCsAgent(
       userActivity as never,
       result.conversationId ?? undefined
     ) as AsyncIterable<CsActivity>;
-    for await (const activity of drainWithTimeout(
+    for await (const activity of drainWhile(
       sendStream,
-      Math.max(1000, (params.timeoutMs ?? DEFAULT_TIMEOUT_MS) - (Date.now() - start)),
+      Math.max(2000, hardTimeoutMs - (Date.now() - start)),
+      () => {
+        // Keep going if we haven't seen any bot reply yet, OR if we've
+        // seen one within the last idle window (more chunks may stream).
+        if (lastBotMessageAt === 0) return true;
+        return Date.now() - lastBotMessageAt < idleAfterReplyMs;
+      },
       () => {
         result.diag.timedOut = true;
       }
     )) {
       handleActivity(activity);
     }
+    // eslint-disable-next-line no-console
+    console.log(
+      `[cs] send stream done in ${Date.now() - sendStartedAt}ms; replyChunks=${replyParts.length} timedOut=${result.diag.timedOut}`
+    );
 
     result.replyText = replyParts.join('\n').trim();
     result.diag.csCallMs = Date.now() - start;
-    result.diag.ok = !result.diag.timedOut && result.replyText.length > 0;
+    result.diag.ok = result.replyText.length > 0;
     if (!result.diag.ok && !result.diag.error) {
       result.diag.error = result.diag.timedOut
-        ? 'CS stream timed out'
+        ? 'CS stream timed out before any bot reply'
         : opened
           ? 'CS returned no reply text'
           : 'CS sendActivity returned no reply text';
