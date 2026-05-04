@@ -304,6 +304,7 @@ export function registerOpenCopilotStudioChatTool(
           chartData: cs.chartData,
           adaptiveCards: cs.adaptiveCards,
           suggestedActions: cs.suggestedActions,
+          escalation: cs.escalation,
           conversationId: cs.conversationId,
           agentDisplayName: config.agentName,
           userQuery,

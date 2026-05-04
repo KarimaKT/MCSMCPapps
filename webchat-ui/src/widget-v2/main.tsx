@@ -49,6 +49,9 @@ type AdaptiveCardPayload = Record<string, unknown>;
 /** Quick reply / suggested action from CS. v0.7.2+. */
 interface SuggestedAction { title: string; value: string; type?: string }
 
+/** Live-agent escalation state. v0.7.3+. */
+type EscalationState = 'none' | 'waiting' | 'connected';
+
 interface ToolPayload {
   replyText: string;
   citations: Citation[];
@@ -57,6 +60,8 @@ interface ToolPayload {
   adaptiveCards?: AdaptiveCardPayload[];
   /** v0.7.2+: Quick replies from CS. Buttons under the reply. */
   suggestedActions?: SuggestedAction[];
+  /** v0.7.3+: Live-agent escalation state. */
+  escalation?: EscalationState;
   conversationId: string | null;
   agentDisplayName: string;
   userQuery?: string;

@@ -252,6 +252,7 @@ export function registerSubmitAdaptiveCardActionTool(
           chartData: cs.chartData,
           adaptiveCards: cs.adaptiveCards,
           suggestedActions: cs.suggestedActions,
+          escalation: cs.escalation,
           conversationId: cs.conversationId,
           agentDisplayName: config.agentName,
           submittedAction: { title: actionTitle, value, data: actionData },

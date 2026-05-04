@@ -116,6 +116,20 @@ export interface SuggestedAction {
   type?: string;
 }
 
+/**
+ * Live-agent escalation state derived from CS activities. v0.7.3+.
+ *
+ * - `none`     — default, no escalation in this turn
+ * - `waiting`  — CS sent a `Handoff` activity OR a hint phrase
+ *                ("connecting you to a person", "agent will be with you").
+ *                User should be told to ping back to receive the
+ *                live agent's reply when it eventually arrives.
+ * - `connected` — placeholder; we don't reliably distinguish "queued"
+ *                vs "agent typing" today. Treated same as `waiting`
+ *                from a UX perspective.
+ */
+export type EscalationState = 'none' | 'waiting' | 'connected';
+
 export interface CallCsAgentResult {
   replyText: string;
   citations: Citation[];
@@ -130,12 +144,19 @@ export interface CallCsAgentResult {
    * v0.7.2+.
    */
   suggestedActions: SuggestedAction[];
+  /**
+   * Live-agent escalation state. v0.7.3+. When `waiting`, the widget
+   * should show a "Check for reply" affordance so the user can ping CS
+   * to receive the live agent's reply when it eventually arrives.
+   */
+  escalation: EscalationState;
   conversationId: string | null;
   diag: {
     csCallMs: number;
     activityCount: number;
     adaptiveCardCount: number;
     suggestedActionCount: number;
+    sawHandoff: boolean;
     timedOut: boolean;
     sawEndOfConversation: boolean;
     ok: boolean;
@@ -325,6 +346,8 @@ interface TurnState {
   chart: ChartData | null;
   adaptiveCards: AdaptiveCard[];
   suggestedActions: SuggestedAction[];
+  /** Did we see an `ActivityTypes.Handoff` activity this turn? v0.7.3+. */
+  sawHandoff: boolean;
   conversationId: string | null;
   activityCount: number;
   sawEndOfConversation: boolean;
@@ -411,6 +434,17 @@ async function consumeTurn(
     );
     if (a.conversation?.id) state.conversationId = a.conversation.id;
 
+    // Live-agent escalation: CS emits a Handoff activity when a topic
+    // routes to Omnichannel / external broker. v0.7.3+. We don't try
+    // to interpret the handoff payload here — just flag it. The
+    // tool layer maps `sawHandoff` to `escalation: 'waiting'`.
+    if (a.type === ActivityTypes.Handoff) {
+      state.sawHandoff = true;
+      // Don't return — Handoff is often followed by a Message
+      // ("connecting you to a person") and EndOfConversation in the
+      // same turn. Keep draining.
+    }
+
     if (a.type === ActivityTypes.EndOfConversation) {
       state.sawEndOfConversation = true;
       // EndOfConversation activities sometimes carry a final summary
@@ -483,12 +517,14 @@ export async function callCsAgent(
     chartData: null,
     adaptiveCards: [],
     suggestedActions: [],
+    escalation: 'none',
     conversationId: params.conversationId ?? null,
     diag: {
       csCallMs: 0,
       activityCount: 0,
       adaptiveCardCount: 0,
       suggestedActionCount: 0,
+      sawHandoff: false,
       timedOut: false,
       sawEndOfConversation: false,
       ok: false
@@ -515,6 +551,7 @@ export async function callCsAgent(
       chart: null,
       adaptiveCards: result.adaptiveCards,
       suggestedActions: result.suggestedActions,
+      sawHandoff: false,
       conversationId: result.conversationId,
       activityCount: 0,
       sawEndOfConversation: false
@@ -633,9 +670,26 @@ export async function callCsAgent(
     result.diag.activityCount = state.activityCount;
     result.diag.adaptiveCardCount = state.adaptiveCards.length;
     result.diag.suggestedActionCount = state.suggestedActions.length;
+    result.diag.sawHandoff = state.sawHandoff;
     result.diag.sawEndOfConversation = state.sawEndOfConversation;
     result.diag.csCallMs = Date.now() - start;
     result.diag.ok = result.replyText.length > 0 || state.adaptiveCards.length > 0;
+    // Escalation state derivation. v0.7.3+.
+    // Primary signal: an explicit Handoff activity. Secondary fallback:
+    // hint phrases in the reply text — handles CS topics that route via
+    // a custom outbound webhook without emitting Handoff.
+    if (state.sawHandoff) {
+      result.escalation = 'waiting';
+    } else if (
+      finalText &&
+      /\b(connect(ing)?|transfer(ring)?)[^.]{0,40}\b(person|agent|representative|specialist|human)\b/i.test(
+        finalText
+      )
+    ) {
+      result.escalation = 'waiting';
+    } else {
+      result.escalation = 'none';
+    }
     if (!result.diag.ok && !result.diag.error) {
       result.diag.error = result.diag.timedOut
         ? 'CS stream timed out before reply'
