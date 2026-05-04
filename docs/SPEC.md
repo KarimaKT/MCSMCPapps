@@ -185,6 +185,33 @@ auth path (anonymous CS public Direct Engine endpoint or AAD SSO via MSAL — ma
 | Maker reads ≤ 1 page of docs to rebrand | "yes" / "no" | "yes" |
 | Net Promoter from forking partners | n/a | ≥ 30 |
 
+### 7.1 Per-turn latency budget
+
+Reference budget for one user turn in M365 Copilot (data-widget pattern,
+Entra SSO + OBO + CS Direct Engine). Numbers are warm-path observations from
+the v0.6 deployment on App Service B1.
+
+| Phase | Time | Owner | Reducible by us? |
+|---|---|---|---|
+| Host LLM picks tool | 0.3–1 s | M365 Copilot | No |
+| Network → App Service | 0.05–0.2 s | network | No |
+| JWKS validate inbound token | <50 ms (cached) | server | Already cached |
+| Entra OBO → PP token | 100–500 ms | Entra | **Yes — server-side PP token cache (per `oid`, ~1 h)** |
+| `startConversationStreaming` | 1–4 s | CS Direct Engine | **Yes — server-side conversationId cache (per `oid`, 25 min)** |
+| `sendActivityStreaming` + bot answer | 1.5–4 s | CS bot LLM | No (bot-side) |
+| Return → host parses → widget mount | 0.3–0.6 s | host + browser | Limited |
+| Host LLM post-tool narrate | 0.5–2 s | M365 Copilot | Workaround only (FR 2.7) |
+
+**Cold first turn:** ~5–15 s. **Warm follow-up turn (with both caches hit):**
+~2–4 s server time + 1–2 s host overhead. Floor is bounded by host LLM passes
++ CS bot inference; both are out of our control.
+
+The two caches that make follow-up turns acceptable live in
+`mcp-server/src/caches.ts` (in-process Map, single App Service instance,
+keyed by Entra `oid`). They compensate for the host LLM being unreliable
+about echoing `conversationId` back as a tool argument, and for OBO being
+a per-call HTTPS round trip.
+
 ## 8. Important parameters (single source of truth)
 
 > **Maker:** these are the values you change. Everything else can stay as-is.

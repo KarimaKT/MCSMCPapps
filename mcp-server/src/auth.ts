@@ -212,13 +212,13 @@ export function entraAuthMiddleware(
  * On-Behalf-Of token exchange: trade the user's inbound Entra token for
  * a Power Platform API token bearing the user's identity.
  *
- * Returns the raw access_token string, or `null` if OBO is not
+ * Returns `{ token, expiresInSec }` on success, or `null` if OBO is not
  * configured (no client secret) or fails. Failures are logged but never
  * thrown — the caller decides whether to fall back to legacy MSAL.
  */
 export async function exchangeForPowerPlatformToken(
   config: EntraConfig
-): Promise<string | null> {
+): Promise<{ token: string; expiresInSec: number } | null> {
   if (!config.clientSecret) {
     // eslint-disable-next-line no-console
     console.warn(
@@ -257,11 +257,19 @@ export async function exchangeForPowerPlatformToken(
       console.warn(`[auth] OBO failed: ${resp.status} ${text.slice(0, 300)}`);
       return null;
     }
-    const json = (await resp.json()) as { access_token?: string };
-    const got = typeof json.access_token === 'string' ? json.access_token : null;
+    const json = (await resp.json()) as {
+      access_token?: string;
+      expires_in?: number;
+    };
+    const token = typeof json.access_token === 'string' ? json.access_token : null;
+    if (!token) return null;
+    // Default to 1h if Entra omits expires_in (it shouldn't).
+    const expiresInSec = typeof json.expires_in === 'number' ? json.expires_in : 3600;
     // eslint-disable-next-line no-console
-    console.log(`[auth] OBO ok (token length=${got?.length ?? 0})`);
-    return got;
+    console.log(
+      `[auth] OBO ok (token length=${token.length} expiresIn=${expiresInSec}s)`
+    );
+    return { token, expiresInSec };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // eslint-disable-next-line no-console

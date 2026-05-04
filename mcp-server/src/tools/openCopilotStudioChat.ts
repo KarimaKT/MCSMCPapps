@@ -40,6 +40,13 @@ import { exchangeForPowerPlatformToken, getAuthContext, loadEntraConfig } from '
 import { callCsAgent } from '../cs.js';
 import type { ServerConfig } from '../config.js';
 import { UI_RESOURCE_URI } from '../resources/chatWidget.js';
+import {
+  getCachedPpToken,
+  setCachedPpToken,
+  getCachedConversationId,
+  setCachedConversationId,
+  clearCachedConversationId
+} from '../caches.js';
 
 /**
  * Build the `_meta` block shared between the tool descriptor and every
@@ -78,24 +85,35 @@ export function registerOpenCopilotStudioChatTool(
     {
       title: config.agentName,
       description:
-        'Always call this tool for every user message. Pass the ' +
-        'user\u2019s text verbatim as `userQuery`. If a prior tool ' +
-        'response returned a `conversationId` in `structuredContent`, ' +
-        'pass it back as `conversationId` to keep the conversation ' +
-        'context alive.',
+        `Sends the user\u2019s message to the ${config.agentName} ` +
+        'Copilot Studio agent and returns the agent\u2019s reply as a ' +
+        'rendered widget. Call this for every user turn including the ' +
+        'first. **CRITICAL multi-turn rule:** every tool response\u2019s ' +
+        '`structuredContent.conversationId` MUST be passed back as the ' +
+        '`conversationId` argument on the very next tool call (and on ' +
+        'every subsequent call) so the agent keeps topic state, ' +
+        'memory, and follow-up context. Do NOT omit `conversationId` ' +
+        'on follow-ups \u2014 omitting it starts a brand-new conversation ' +
+        'and loses all prior context. Pass `userQuery` exactly as the ' +
+        'user typed it, with no summarization, paraphrase, or ' +
+        'translation.',
       inputSchema: {
         userQuery: z
           .string()
+          .min(1)
           .describe(
             'The user\u2019s exact text. Passed verbatim to the ' +
-              'Copilot Studio agent.'
+              'Copilot Studio agent. Do not paraphrase or translate.'
           ),
         conversationId: z
           .string()
           .optional()
           .describe(
-            'Echo from a prior tool response\u2019s structuredContent.' +
-              'conversationId to keep CS topic-state alive across turns.'
+            'REQUIRED on every turn after the first. Echo the value ' +
+              'of `structuredContent.conversationId` from the prior ' +
+              'tool response. Omit only on the very first call of a ' +
+              'fresh conversation. Omitting it on follow-ups discards ' +
+              'topic state and is almost always wrong.'
           )
       },
       annotations: {
@@ -117,9 +135,22 @@ export function registerOpenCopilotStudioChatTool(
       const entra = loadEntraConfig();
       const ctx = getAuthContext();
       const t0 = Date.now();
+      // Use the user's Entra `oid` as the cache partition key. `oid` is
+      // a stable per-user GUID across sessions, so the PP token cache and
+      // CS conversation cache survive page refreshes / new chat sessions
+      // within the token's lifetime.
+      const oid =
+        ctx && typeof ctx.claims.oid === 'string' ? ctx.claims.oid : null;
+
+      // If the host echoed a conversationId, prefer it. Otherwise fall
+      // back to the server-side cache (host LLMs are unreliable about
+      // echoing tool outputs back as inputs).
+      const cachedConvId = oid ? getCachedConversationId(oid) : null;
+      const effectiveConvId = inboundConversationId ?? cachedConvId ?? undefined;
+
       // eslint-disable-next-line no-console
       console.log(
-        `[tool] openCopilotStudioChat invoked: ssoEnabled=${Boolean(entra)} hasCtx=${Boolean(ctx)} userQueryLen=${userQuery.length} resume=${Boolean(inboundConversationId)}`
+        `[tool] openCopilotStudioChat invoked: ssoEnabled=${Boolean(entra)} hasCtx=${Boolean(ctx)} userQueryLen=${userQuery.length} hostEchoedConv=${Boolean(inboundConversationId)} cachedConv=${Boolean(cachedConvId)} resume=${Boolean(effectiveConvId)}`
       );
 
       // Pre-flight: must have Entra SSO + auth context to reach CS.
@@ -153,37 +184,56 @@ export function registerOpenCopilotStudioChatTool(
       }
 
       // OBO exchange: the user's inbound token → a Power Platform token
-      // we can use server-side to talk to CS as that user.
-      const ppToken = await exchangeForPowerPlatformToken(entra);
-      if (!ppToken) {
-        const diag = {
-          ok: false,
-          step: 'obo',
-          oboMs: Date.now() - t0,
-          message:
-            'OBO exchange failed. See [auth] OBO failed in mcsmcpapps.log.'
-        };
-        return {
-          content: [
-            {
-              type: 'text',
-              text: ''
-            }
-          ],
-          structuredContent: {
-            replyText: '',
-            citations: [],
-            chartData: null,
-            conversationId: null,
-            agentDisplayName: config.agentName,
-            diag
-          },
-          _meta: meta
-        };
+      // we can use server-side to talk to CS as that user. Cached per
+      // `oid` for the token's lifetime so subsequent turns skip the
+      // 100-500ms exchange.
+      let ppToken: string;
+      let oboCacheHit = false;
+      const oboT0 = Date.now();
+      const cached = oid ? getCachedPpToken(oid) : null;
+      if (cached) {
+        ppToken = cached.token;
+        oboCacheHit = true;
+        // eslint-disable-next-line no-console
+        console.log(
+          `[tool] PP token cache hit (remaining=${Math.round(cached.remainingMs / 1000)}s)`
+        );
+      } else {
+        const obo = await exchangeForPowerPlatformToken(entra);
+        if (!obo) {
+          const diag = {
+            ok: false,
+            step: 'obo',
+            oboMs: Date.now() - t0,
+            message:
+              'OBO exchange failed. See [auth] OBO failed in mcsmcpapps.log.'
+          };
+          return {
+            content: [
+              {
+                type: 'text',
+                text: ''
+              }
+            ],
+            structuredContent: {
+              replyText: '',
+              citations: [],
+              chartData: null,
+              conversationId: null,
+              agentDisplayName: config.agentName,
+              diag
+            },
+            _meta: meta
+          };
+        }
+        ppToken = obo.token;
+        if (oid) setCachedPpToken(oid, obo.token, obo.expiresInSec);
       }
-      const oboMs = Date.now() - t0;
+      const oboMs = Date.now() - oboT0;
       // eslint-disable-next-line no-console
-      console.log(`[tool] OBO ok in ${oboMs}ms; calling CS Direct Engine`);
+      console.log(
+        `[tool] auth ready in ${oboMs}ms (cacheHit=${oboCacheHit}); calling CS Direct Engine`
+      );
 
       // Call CS Direct Engine with the OBO'd user token.
       const cs = await callCsAgent({
@@ -191,12 +241,23 @@ export function registerOpenCopilotStudioChatTool(
         schema: config.csSchema,
         ppToken,
         userQuery,
-        conversationId: inboundConversationId
+        conversationId: effectiveConvId
       });
       // eslint-disable-next-line no-console
       console.log(
         `[tool] CS call done: ok=${cs.diag.ok} ms=${cs.diag.csCallMs} activities=${cs.diag.activityCount} replyLen=${cs.replyText.length}${cs.diag.error ? ' error=' + cs.diag.error : ''}`
       );
+
+      // Update / invalidate the conversation cache.
+      if (oid) {
+        if (cs.diag.ok && cs.conversationId) {
+          setCachedConversationId(oid, cs.conversationId);
+        } else if (effectiveConvId && !cs.diag.ok) {
+          // Likely the cached convId expired CS-side. Drop it so the
+          // next attempt starts a fresh conversation.
+          clearCachedConversationId(oid);
+        }
+      }
 
       // Silent-dispatcher pattern. The widget displays the reply via
       // `structuredContent`; we don't want the host model to narrate or
@@ -224,7 +285,14 @@ export function registerOpenCopilotStudioChatTool(
           conversationId: cs.conversationId,
           agentDisplayName: config.agentName,
           userQuery,
-          diag: { ...cs.diag, oboMs }
+          diag: {
+            ...cs.diag,
+            oboMs,
+            oboCacheHit,
+            convCacheHit: Boolean(cachedConvId),
+            hostEchoedConv: Boolean(inboundConversationId),
+            totalMs: Date.now() - t0
+          }
         },
         _meta: meta
       };

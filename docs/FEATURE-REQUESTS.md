@@ -369,6 +369,71 @@ calls" — works ~60% of the time. CS Copilot Studio doesn't have this gap.
 
 ---
 
+### 2.8 Let an MCP App run as an actual app, not as a tool the LLM may call
+
+**Pain.** The current MCP App contract treats every user turn as "host LLM looks at the
+DA instructions, decides whether to invoke a tool, calls it, then narrates." That model
+is right for *augmenting* the host with knowledge, but it's the wrong model for
+*launching an app*. When a user picks the "Eurozone Analyst" agent from the agent
+picker, they have already chosen the app — the host shouldn't be re-deciding whether
+to route to it on every turn.
+
+Concretely, the LLM-in-the-loop costs are paid on every single user message:
+
+- **Latency.** Pre-tool LLM pass (0.3–1 s) + post-tool narrate pass (0.5–2 s) added to
+  every turn, on top of the actual tool work.
+- **Cost.** Two LLM passes per turn that the maker is implicitly billed for, even when
+  the maker just wants the tool's `structuredContent` rendered.
+- **Reliability.** The host can choose *not* to call the tool (FR 2.6), can lose the
+  `conversationId` between turns (drives the need for FR 2.8a below), and can narrate
+  unwanted commentary (FR 2.7).
+- **UX confusion.** Users see "an agent" in the picker, expect it to behave like an app
+  (predictable, branded, fast), and instead get a chat surface where the agent
+  occasionally answers from the host LLM's general knowledge.
+
+**Ask.** Add an "app mode" / "deterministic mode" for declarative agents:
+
+1. **DA-level field** `behavior_overrides.app_mode: true` — when set, the host
+   short-circuits the LLM passes:
+   - For each user turn, the host calls the agent's single declared "primary action"
+     (or first action if only one exists) with `userQuery` set to the user's exact
+     text and `conversationId` set to the **host-managed thread id** (see 2 below).
+   - The widget that the tool returns IS the entire turn. No pre-LLM tool selection,
+     no post-LLM narration.
+   - Latency drops by ~1–3 s/turn; cost drops to one MCP call + widget mount.
+2. **Host-managed conversation continuity.** When app mode is on, the host MUST pass
+   a stable per-thread id (e.g. `_meta["m365copilot/threadId"]` or as the first arg
+   of the action) to the tool. This eliminates the "host LLM forgot to echo
+   `conversationId`" failure mode that today forces servers to keep a side cache
+   keyed by user `oid`.
+
+**Repro.**
+
+1. Build a DA whose only purpose is to dispatch every user message to one MCP tool that
+   renders a widget (the data-widget pattern from this repo).
+2. Time end-to-end latency for 5 consecutive turns. Inspect server logs for tool-call
+   payloads.
+3. **Observe:** every turn pays ~1.5 s in LLM passes that contributed nothing. The
+   `conversationId` argument is missing on ~30% of follow-up calls, so the server has
+   to maintain a side cache to keep CS topic state alive.
+
+**Why it matters.** Without app mode, MCP Apps will always be a degraded version of
+"a real app embedded in M365 Copilot" — slower, less reliable, more expensive than the
+underlying backend can be. Declarative agents that wrap a single backend (Copilot
+Studio agent, internal API, custom analyst) are the most common pattern partners are
+asking us about; they should not have to fight the host LLM to make that pattern work.
+
+**Adjacent precedent.** This is the same architectural distinction Power Apps and Power
+BI embeds make against Copilot summaries: the embed is the answer; the LLM doesn't
+re-paraphrase it on every interaction. MCP Apps need the same bifurcation.
+
+**Workaround today.** Tightened DA instructions ("you are a silent dispatcher, call the
+tool, emit zero tokens") + empty `content[0].text` + server-side `oid → conversationId`
+cache. Combined effect is acceptable but not great: ~70–80% silent, follow-ups
+sometimes start a fresh conversation, every turn still pays 1–2 LLM passes.
+
+---
+
 ## IMPORTANT — Conversation, state, observability
 
 ### 3.1 Expose the CS conversation id to the widget natively
