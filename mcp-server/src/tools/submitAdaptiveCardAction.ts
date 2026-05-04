@@ -76,46 +76,34 @@ export function registerSubmitAdaptiveCardActionTool(
 ): void {
   const m = meta(config);
 
+  // ===================================================================
+  // LOCKED CONTRACT — DO NOT CHANGE WITHOUT MANIFEST BUMP
+  // See .github/copilot-instructions.md "Locked contract surface" and
+  // docs/PRE-DEPLOY-CHECKLIST.md. Tool name, input schema, and
+  // description are part of the manifest snapshot the host caches at
+  // admin-approval time.
+  // ===================================================================
   server.registerTool(
     'submitAdaptiveCardAction',
     {
       title: `${config.agentName} card submit`,
-      description:
-        'Posts an Adaptive Card form submit back to the live ' +
-        `${config.agentName} conversation. Call this when the widget ` +
-        'reports the user clicked an Action.Submit button on a card. ' +
-        'Always include `conversationId` from the prior tool response, ' +
-        'and `value` from the renderer\u2019s collected input map. The ' +
-        'agent\u2019s reply is rendered by the same widget.',
+      description: `Posts an Adaptive Card form submit back to ${config.agentName}. Call only when the widget reports an Action.Submit click.`,
       inputSchema: {
         conversationId: z
           .string()
           .min(1)
-          .describe(
-            'REQUIRED. The CS conversation id that emitted the card. ' +
-              'Must match `structuredContent.conversationId` from the ' +
-              'prior response. Mismatched id discards topic state.'
-          ),
+          .describe('CS conversation id from the prior tool response.'),
         value: z
           .record(z.unknown())
-          .describe(
-            'Form input values, keyed by Adaptive Card input id. ' +
-              'Verbatim from the renderer\u2019s getAllInputs().'
-          ),
+          .describe('Form input values keyed by Adaptive Card input id.'),
         actionTitle: z
           .string()
           .optional()
-          .describe(
-            'The clicked Submit action\u2019s title. Recorded in the ' +
-              'CS transcript as `activity.text`; not used for routing.'
-          ),
+          .describe('Clicked Submit action title.'),
         actionData: z
           .record(z.unknown())
           .optional()
-          .describe(
-            'Optional Action.Submit `data` payload. Merged into `value` ' +
-              'before posting (some CS topics check `data.id` to route).'
-          )
+          .describe('Optional Action.Submit data payload.')
       },
       annotations: {
         readOnlyHint: false,

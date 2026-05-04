@@ -61,3 +61,36 @@ If you're acting as one of those roles, stay in role. Don't have the researcher 
 - Did not write ADRs for the stateless-transport pivot or the Entra-SSO-via-TDP path.
 
 If any of these happen again, stop and write the missing artifact before more code.
+
+## Locked contract surface (May 4 incident)
+
+The **published manifest captures a snapshot of the tool catalog at admin-approval time.** The host LLM uses that cached catalog to plan calls; our live `tools/list` is consulted but does not override its decision tree. Therefore:
+
+**THESE FIELDS ARE PART OF THE LOCKED CONTRACT — changing any of them after a manifest publish requires a manifest version bump + admin re-approval, OR they will silently corrupt routing in production:**
+
+1. Tool **name** (`openCopilotStudioChat`, `submitAdaptiveCardAction`)
+2. Tool **input schema**: arg names, arg types, **arg optionality**
+3. Tool **description string** (the LLM treats this as authoritative even when it's stale)
+4. Number of tools registered
+5. `_meta["openai/outputTemplate"]` resource URI
+6. The MIME type the resource serves (`text/html+skybridge`)
+
+**OK to change without manifest bump:**
+- The widget bundle contents (HTML/JS body served by the resource handler)
+- The CS conversation logic in `cs.ts`
+- Server-side caches, OBO logic, headers parsed
+- `structuredContent` *additions* (new fields are ignored by older widgets — additive only)
+- DA `instructions` field — wait, NO: this IS in the manifest. See below.
+
+**Both of these need a manifest bump:**
+- DA `instructions` text (lives in `declarativeAgent.json`)
+- DA `conversation_starters`
+
+**Tool description guidance.** Keep the `description` field one sentence. Imperative behavior rules belong in the DA `instructions`, NOT in the tool description. Long verbose tool descriptions push the host LLM into "describe instead of call" mode (observed May 4 — model emitted `<openCopilotStudioChat userQuery="...">` as plaintext into the chat instead of invoking the tool, with hallucinated args like `dateTime` and `userLocale`).
+
+**Pre-deploy checklist.** Before any commit that touches `mcp-server/src/tools/*.ts`:
+1. Did I change a name, type, or optionality of any input arg? → manifest bump + re-approval required
+2. Did I add or remove a tool? → manifest bump + re-approval required
+3. Did I rewrite the tool description? → consider whether the host LLM will need to relearn how to call it (often forces a manifest bump even if technically the schema didn't change)
+4. After deploy, hit the smoke check (S01 from `docs/SMOKE-CHECKLIST.md`) within 30 seconds. If it fails, REVERT immediately.
+5. Server-only changes that don't touch tool descriptors are safe to ship without a republish.

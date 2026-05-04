@@ -80,6 +80,37 @@ export function registerOpenCopilotStudioChatTool(
 ): void {
   const meta = buildToolMeta(config);
 
+  // ===================================================================
+  // LOCKED CONTRACT — DO NOT CHANGE WITHOUT MANIFEST BUMP
+  // ===================================================================
+  // The published M365 app manifest captures a snapshot of this tool's
+  // catalog (name, description, input schema) at admin-approval time.
+  // The host LLM uses that cached catalog to plan calls. Changing any
+  // field below after publish — without bumping the manifest version
+  // and getting tenant admin re-approval — corrupts host routing in
+  // ways that look like "the tool isn't being called" or "the model
+  // emits the args as plaintext into the chat".
+  //
+  // Specifically locked:
+  //   - tool name: 'openCopilotStudioChat'
+  //   - input arg names: userQuery, conversationId
+  //   - input arg types: string, string
+  //   - input arg optionality: userQuery required, conversationId optional
+  //   - tool description (one short sentence — keep it that way)
+  //
+  // OK to change without a manifest bump:
+  //   - The handler body below the registerTool({...}) call
+  //   - structuredContent additions (new fields are ignored by older widgets)
+  //   - _meta values (handled host-side, less strict)
+  //
+  // Behavior rules ("ALWAYS pass conversationId on follow-ups" etc.)
+  // belong in the DA instructions field (declarativeAgent.json), NOT
+  // in the tool description. Long verbose descriptions push the host
+  // LLM into "describe instead of call" mode — verified May 4 incident.
+  //
+  // See .github/copilot-instructions.md "Locked contract surface" and
+  // docs/PRE-DEPLOY-CHECKLIST.md before editing anything in this block.
+  // ===================================================================
   server.registerTool(
     'openCopilotStudioChat',
     {
