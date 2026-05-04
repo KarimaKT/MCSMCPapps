@@ -290,13 +290,35 @@ function extractSuggestedActions(
 
 /** What we collect per turn. */
 interface TurnState {
+  /**
+   * Non-streaming message chunks (each kept separately so we can join).
+   * Used by topics that DON'T set `streaminfo` entities — they may
+   * legitimately send multiple message activities that are meant to be
+   * concatenated.
+   */
   replyParts: string[];
   /**
-   * Interim "I'm working on it" placeholder text (e.g. "Thanks, I'll
-   * get that for you") that CS sometimes sends BEFORE doing a long
-   * tool call / generative step. We capture but do NOT include in the
-   * final replyText — including it would concatenate the placeholder
-   * with the real answer in the widget. v0.7.2b+.
+   * Latest cumulative text from a Bot Framework streaming session
+   * (`entities[].type === 'streaminfo'`, `streamType: 'streaming'`).
+   * Streaming chunks are CUMULATIVE per Microsoft's spec — each chunk's
+   * `text` MUST contain everything streamed so far. So we replace, not
+   * append.
+   *
+   * On `streamType: 'final'` (a `type: 'message'` activity), the
+   * authoritative final text supersedes everything in this buffer.
+   *
+   * Reference: https://learn.microsoft.com/en-us/microsoftteams/platform/bots/streaming-ux
+   */
+  streamingText: string;
+  /** The streamId we're currently tracking (first one wins per turn). */
+  streamId: string | null;
+  /** Final-streamed text (from the `streamType: 'final'` activity). */
+  finalStreamedText: string | null;
+  /**
+   * Interim "I'm working on it" placeholder text. Comes from either:
+   *   - `streamType: 'informative'` entities (newer streaming agents)
+   *   - `inputHint: 'ignoringInput'` messages (older non-streaming agents)
+   * Captured for diagnostics but excluded from final replyText.
    */
   interimText: string[];
   citations: Citation[];
@@ -309,23 +331,64 @@ interface TurnState {
 }
 
 /**
+ * Read the `streaminfo` entity from an activity's `entities[]`, if any.
+ * BF streaming protocol uses `type: 'streaminfo'` (lowercase). Returns
+ * `null` if the activity isn't part of a streaming sequence.
+ *
+ * Reference: https://learn.microsoft.com/en-us/microsoftteams/platform/bots/streaming-ux#stream-message-through-rest-api
+ */
+function readStreamInfo(activity: Activity): {
+  streamType: 'informative' | 'streaming' | 'final';
+  streamId?: string;
+  streamSequence?: number;
+} | null {
+  const ents = (activity as unknown as {
+    entities?: Array<Record<string, unknown>>;
+  }).entities;
+  if (!Array.isArray(ents)) return null;
+  for (const e of ents) {
+    if (!e || typeof e !== 'object') continue;
+    const t = e['type'] ?? e['@type'];
+    if (typeof t !== 'string' || t.toLowerCase() !== 'streaminfo') continue;
+    const streamType = e['streamType'];
+    if (streamType !== 'informative' && streamType !== 'streaming' && streamType !== 'final') {
+      continue;
+    }
+    return {
+      streamType,
+      streamId: typeof e['streamId'] === 'string' ? e['streamId'] : undefined,
+      streamSequence: typeof e['streamSequence'] === 'number' ? e['streamSequence'] : undefined
+    };
+  }
+  return null;
+}
+
+/**
  * Iterate a CS streaming reply; collect text + citations + chart and
  * exit on `EndOfConversation`. Per the MS sample, this is the canonical
  * end-of-turn signal.
  *
- * # Interim-message handling (v0.7.2b)
+ * # Three message-flow patterns supported
  *
- * CS topics that do long-running work commonly send an interim
- * message first: `"Thanks, I'll get that for you"` — then 30-120 s
- * later, the real answer. The interim message is marked with
- * `inputHint: "ignoringInput"`, which signals "the user shouldn't
- * type yet because more is coming." We use that signal to filter the
- * placeholder OUT of `replyText` so it doesn't concatenate with the
- * real answer in the widget.
+ * **A. Single-shot** (default CS topics): one or more `Message`
+ * activities, each with text, then `EndOfConversation`. Concatenated
+ * into the final reply.
  *
- * If `inputHint` is missing (older topics, custom adapters), we fall
- * back to keeping all messages — better to show a duplicate than to
- * drop the real answer.
+ * **B. Interim placeholder** (CS topics that do long work): one
+ * `Message` with `inputHint: 'ignoringInput'` ("Thanks, I'll get that
+ * for you"), then later the real `Message`, then `EndOfConversation`.
+ * The placeholder is filtered out of the final reply but retained for
+ * diagnostics.
+ *
+ * **C. BF-streaming** (AI-powered agents using `streaminfo` entities):
+ *    - Optional `Typing` activities with `streamType: 'informative'`
+ *      ("Searching documents…") — captured as interim, not in final
+ *    - `Typing` activities with `streamType: 'streaming'` carrying
+ *      cumulative `text` — replace, do NOT concatenate
+ *    - Final `Message` with `streamType: 'final'` — authoritative reply,
+ *      supersedes the cumulative streaming buffer
+ *
+ * Reference for C: https://learn.microsoft.com/en-us/microsoftteams/platform/bots/streaming-ux
  */
 async function consumeTurn(
   source: AsyncIterable<Activity>,
@@ -341,28 +404,61 @@ async function consumeTurn(
       inputHint?: string;
       conversation?: { id?: string };
     };
+    const stream = readStreamInfo(activity);
     // eslint-disable-next-line no-console
     console.log(
-      `[cs] activity #${state.activityCount} type=${a.type ?? '?'} textLen=${typeof a.text === 'string' ? a.text.length : 0}${a.inputHint ? ' hint=' + a.inputHint : ''}${a.conversation?.id ? ' conv=' + String(a.conversation.id).slice(0, 8) : ''}`
+      `[cs] activity #${state.activityCount} type=${a.type ?? '?'} textLen=${typeof a.text === 'string' ? a.text.length : 0}${a.inputHint ? ' hint=' + a.inputHint : ''}${stream ? ' stream=' + stream.streamType + (stream.streamSequence ? '/' + stream.streamSequence : '') : ''}${a.conversation?.id ? ' conv=' + String(a.conversation.id).slice(0, 8) : ''}`
     );
     if (a.conversation?.id) state.conversationId = a.conversation.id;
 
     if (a.type === ActivityTypes.EndOfConversation) {
       state.sawEndOfConversation = true;
       // EndOfConversation activities sometimes carry a final summary
-      // text; capture it if so.
+      // text; capture it if so. (Streaming agents put the final text in
+      // a separate `streamType: final` message before this.)
       if (typeof a.text === 'string' && a.text.trim()) {
         state.replyParts.push(a.text);
       }
       return; // exit the loop
     }
 
+    // ------- Pattern C: BF-streaming via `streaminfo` entity -------
+    if (stream) {
+      // Capture the streamId on first sighting so we can detect
+      // out-of-order chunks (we don't reconcile, just log).
+      if (!state.streamId && stream.streamId) {
+        state.streamId = stream.streamId;
+      }
+      const text = typeof a.text === 'string' ? a.text : '';
+      if (stream.streamType === 'informative') {
+        // "Searching documents…" — interim, drop from final.
+        if (text.trim()) state.interimText.push(text);
+      } else if (stream.streamType === 'streaming') {
+        // Cumulative — replace, don't append.
+        state.streamingText = text;
+      } else if (stream.streamType === 'final') {
+        // Authoritative final answer. Supersedes everything in the
+        // streaming buffer. Type is `Message` per the protocol.
+        state.finalStreamedText = text;
+      }
+      // Streaming activities can carry citations + cards too on the
+      // final chunk per the spec; extract from all stream activities to
+      // be safe.
+      extractCitations(activity, state.citations);
+      extractAdaptiveCards(activity, state.adaptiveCards);
+      extractSuggestedActions(activity, state.suggestedActions);
+      const chart = extractChart(activity);
+      if (chart) state.chart = chart;
+      continue;
+    }
+
+    // ------- Patterns A + B: regular Message activities -------
     if (a.type === ActivityTypes.Message && typeof a.text === 'string' && a.text.trim()) {
       if (a.inputHint === 'ignoringInput') {
-        // Placeholder: "Thanks, I'll get that for you", "Working on it…".
-        // CS will send the real answer in a later activity.
+        // Pattern B: placeholder. CS will send the real answer later.
         state.interimText.push(a.text);
       } else {
+        // Pattern A: real reply chunk.
         state.replyParts.push(a.text);
       }
     }
@@ -411,6 +507,9 @@ export async function callCsAgent(
 
     const state: TurnState = {
       replyParts: [],
+      streamingText: '',
+      streamId: null,
+      finalStreamedText: null,
       interimText: [],
       citations: result.citations,
       chart: null,
@@ -506,17 +605,28 @@ export async function callCsAgent(
     );
     // eslint-disable-next-line no-console
     console.log(
-      `[cs] sendActivity done in ${Date.now() - sendStartedAt}ms; replyChunks=${state.replyParts.length} interimChunks=${state.interimText.length} eoc=${state.sawEndOfConversation} timedOut=${result.diag.timedOut}`
+      `[cs] sendActivity done in ${Date.now() - sendStartedAt}ms; replyChunks=${state.replyParts.length} streamId=${state.streamId ? state.streamId.slice(0, 8) : 'none'} finalStreamLen=${state.finalStreamedText?.length ?? 0} streamingBufLen=${state.streamingText.length} interimChunks=${state.interimText.length} eoc=${state.sawEndOfConversation} timedOut=${result.diag.timedOut}`
     );
 
-    // Final answer prefers `replyParts` (messages with no inputHint /
-    // acceptingInput). If those are empty, fall back to interim text
-    // (some topics never set inputHint at all; better to show the
-    // placeholder than to fail silently).
-    const finalText =
-      state.replyParts.length > 0
-        ? state.replyParts.join('\n').trim()
-        : state.interimText.join('\n').trim();
+    // Final-text resolution priority:
+    //   1. `finalStreamedText` — authoritative final from streaminfo
+    //      streamType: 'final'. Beats everything per BF spec.
+    //   2. `replyParts.join` — non-streaming Message activities.
+    //   3. `streamingText` — last cumulative streaming chunk if no
+    //      `final` ever arrived (defensive — agent stopped streaming
+    //      without sending the final marker).
+    //   4. `interimText.join` — only "Thanks, I'll get that for you"
+    //      ever arrived. Better than blank.
+    let finalText = '';
+    if (state.finalStreamedText && state.finalStreamedText.trim()) {
+      finalText = state.finalStreamedText.trim();
+    } else if (state.replyParts.length > 0) {
+      finalText = state.replyParts.join('\n').trim();
+    } else if (state.streamingText.trim()) {
+      finalText = state.streamingText.trim();
+    } else {
+      finalText = state.interimText.join('\n').trim();
+    }
     result.replyText = finalText;
     result.chartData = state.chart;
     result.conversationId = state.conversationId;
