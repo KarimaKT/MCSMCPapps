@@ -39,38 +39,40 @@ with overhead (form submit — pays an LLM round trip on every click).
 
 ## Capability matrix
 
-| # | CS capability | Standalone CS | MCPApp v0.6.4 | MCPApp target | Tracking |
+| # | CS capability | Standalone CS | MCPApp v0.7 | MCPApp target | Tracking |
 |--:|---|:-:|:-:|:-:|---|
 | 1 | Plain text reply | ✅ | ✅ | ✅ | — |
-| 2 | Markdown text (bold, lists, links) | ✅ | ⚠️ raw text only | ✅ v0.7.0 | spec 0002 |
-| 3 | Citations (`entities[]` Claim) | ✅ | ✅ basic | ✅ | — |
+| 2 | Markdown text (bold, lists, links, tables) | ✅ | ✅ | ✅ | shipped v0.7.0 |
+| 3 | Citations (`entities[]` Claim) | ✅ | ✅ | ✅ | — |
 | 4 | Streaming partial reply | ✅ | ❌ (we drain to EoC) | ⚠️ partial v0.7.4 | FR 5.1 |
-| 5 | Suggested actions / quick replies | ✅ | ❌ | ✅ v0.7.2 | spec 0003 |
-| 6 | Adaptive Card — text + columns | ✅ | ❌ | ✅ v0.7.0 | spec 0002 |
-| 7 | Adaptive Card — image (URL) | ✅ | ❌ | ✅ v0.7.0 | spec 0002 |
-| 8 | Adaptive Card — image (base64) | ✅ | ❌ | ✅ v0.7.0 | spec 0002 |
-| 9 | Adaptive Card — `Action.OpenUrl` | ✅ | ❌ | ✅ v0.7.0 | spec 0002 |
-| 10 | Adaptive Card — `Action.Submit` (postback) | ✅ | ❌ | ✅ v0.7.1 | spec 0003, FR 2.9 |
-| 11 | Adaptive Card — `Input.Text` form | ✅ | ❌ | ✅ v0.7.1 | spec 0003, FR 2.10 |
-| 12 | Adaptive Card — `Input.ChoiceSet` form | ✅ | ❌ | ✅ v0.7.1 | spec 0003 |
-| 13 | Adaptive Card — `Input.Date / Time / Number / Toggle` | ✅ | ❌ | ✅ v0.7.1 | spec 0003 |
-| 14 | Hero card / thumbnail card (legacy) | ✅ | ❌ | ⚠️ v0.7.0 best-effort | spec 0002 |
-| 15 | Multi-card carousel in one activity | ✅ | ❌ | ✅ v0.7.0 | spec 0002 |
-| 16 | Multi-turn topic state continuity | ✅ | ⚠️ host-echo only | ✅ via host echo + DA discipline | FR 2.8 |
-| 17 | Hand-off to live agent (D365 Omnichannel) | ✅ | ❌ (had in v0.5 chat-in-chat) | ✅ v0.7.3 | spec 0004 |
+| 5 | Suggested actions / quick replies | ✅ | ✅ | ✅ | shipped v0.7.2 |
+| 6 | Adaptive Card — text + columns | ✅ | ✅ | ✅ | shipped v0.7.0 |
+| 7 | Adaptive Card — image (URL) | ✅ | ✅ | ✅ | shipped v0.7.0 |
+| 8 | Adaptive Card — image (base64) | ✅ | ✅ | ✅ | shipped v0.7.0 |
+| 9 | Adaptive Card — `Action.OpenUrl` | ✅ | ✅ | ✅ | shipped v0.7.0 |
+| 10 | Adaptive Card — `Action.Submit` (postback) | ✅ | ✅ | ✅ | shipped v0.7.1 |
+| 11 | Adaptive Card — `Input.Text` form | ✅ | ✅ | ✅ | shipped v0.7.1 |
+| 12 | Adaptive Card — `Input.ChoiceSet` form | ✅ | ✅ | ✅ | shipped v0.7.1 |
+| 13 | Adaptive Card — `Input.Date / Time / Number / Toggle` | ✅ | ✅ | ✅ | shipped v0.7.1 |
+| 14 | Hero card / thumbnail card (legacy) | ✅ | ⚠️ | ⚠️ best-effort | spec 0002 |
+| 15 | Multi-card carousel in one activity | ✅ | ✅ | ✅ | shipped v0.7.0 |
+| 16 | Multi-turn topic state continuity | ✅ | ✅ | ✅ | shipped v0.7.0 (header-keyed cache) |
+| 17 | Hand-off to live agent (D365 Omnichannel) | ✅ | ❌ | ✅ v0.7.3 | spec 0004 |
 | 18 | Tool calls / agent flows triggered by user msg | ✅ (in CS) | ✅ (CS still runs them) | ✅ | — |
 | 19 | Knowledge sources (Dataverse, SharePoint, web) | ✅ (in CS) | ✅ (CS still queries them) | ✅ | — |
 | 20 | Generative answers from CS | ✅ | ✅ | ✅ | — |
-| 21 | Image generation (output) | ✅ via tools | ⚠️ as URL only | ✅ v0.7.0 (URL render) | spec 0002 |
-| 22 | File DOWNLOAD (CS → user, e.g. report PDF) | ✅ | ❌ | ⚠️ v0.7.5 link-only | FR 6.1 |
+| 21 | Image generation (output as URL/data) | ✅ via tools | ✅ | ✅ | shipped v0.7.0 |
+| 22 | File DOWNLOAD (CS → user, e.g. report PDF) | ✅ | ⚠️ link only | ⚠️ v0.8 | FR 6.1 |
 | 23 | File UPLOAD (user → CS, e.g. invoice scan) | ✅ | ❌ | ❌ blocked | FR 6.2 |
 | 24 | Voice input | ✅ | ❌ | ❌ host gap | FR 7.1 |
 | 25 | Voice output (TTS) | ✅ | ❌ | ❌ host gap | FR 7.2 |
 | 26 | Topic conditions / variables (CS-side) | ✅ | ✅ (CS still evaluates) | ✅ | — |
-| 27 | Variables / context passed in from environment | ✅ | ⚠️ only `userQuery` & `conversationId` today | ✅ v0.7.6 (extensible context) | spec 0005 |
-| 28 | Per-tool / per-topic "respond after" toggle | ✅ | ❌ | ⚠️ workaround only | FR 2.7 |
+| 27 | Variables / context passed in from environment | ✅ | ⚠️ only `userQuery` & `conversationId` today | ✅ v0.7.5 (extensible context) | spec 0005 |
+| 28 | Per-tool / per-topic "respond after" toggle | ✅ | ⚠️ workaround only | ⚠️ workaround only | FR 2.7 |
 | 29 | Proactive messages (CS → user, e.g. "report ready") | ✅ | ❌ | ❌ | FR 3.3 |
 | 30 | Conversation transcript / Dataverse logging | ✅ | ✅ (CS logs same as standalone) | ✅ | FR 3.2 (surfacing only) |
+| 31 | Print / save analyst answer to PDF | ⚠️ browser print | ✅ Print button in fullscreen | ✅ | shipped v0.7.0 |
+| 32 | Copy answer to clipboard | ⚠️ manual select | ✅ Copy button in fullscreen | ✅ | shipped v0.7.0 |
 
 ## Latency parity
 
