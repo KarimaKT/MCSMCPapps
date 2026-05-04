@@ -275,27 +275,59 @@ export async function callCsAgent(
       sawEndOfConversation: false
     };
 
-    // Step 1 — REMOVED in v0.6.3.
+    // Step 1 — open the CS conversation if we don't already have one.
     //
-    // We used to call `startConversationStreaming(true)` first to open
-    // a new CS conversation, drain the greeting activities, and capture
-    // the conversation id. That was modeled after the MS console-chat
-    // sample, where you want to print the greeting. For our use case
-    // (user already typed a question; we just want CS's reply), it's
-    // a wasted round trip — adds ~3-30s of cold-path latency without
-    // any user-visible benefit.
+    // v0.6.3 attempt to skip this entirely failed: the SDK's
+    // `sendActivityStreaming` does NOT create a conversation on the
+    // fly. Without a prior `startConversationStreaming` call the
+    // server returns one ack activity (no bot reply, no
+    // EndOfConversation, ~450ms), and `state.replyParts` stays empty.
     //
-    // The CS Direct Engine `sendActivityStreaming(activity)` SDK call
-    // creates the conversation server-side on the first invocation
-    // when the activity has no `conversation.id`. CS's "On Conversation
-    // Start" topic still fires (it's CS-side, triggered by conversation
-    // creation regardless of which API opened it). So we just send the
-    // user's question directly and pick up the conversation id from
-    // the streaming reply's first activity.
+    // What we DO skip in v0.6.4: we no longer drain step 1 to
+    // EndOfConversation. As soon as we capture `conversation.id` from
+    // any activity in the start stream, we break out and move on to
+    // step 2. The greeting / "On Conversation Start" topic output
+    // gets discarded — that's the desired behavior anyway since the
+    // user is asking a question, not opening a new chat.
+    if (!state.conversationId) {
+      const startStartedAt = Date.now();
+      // eslint-disable-next-line no-console
+      console.log('[cs] startConversationStreaming(true)');
+      try {
+        const startStream = client.startConversationStreaming(
+          true
+        ) as AsyncIterable<Activity>;
+        const startBudgetMs = Math.max(
+          1500,
+          Math.min(8000, hardTimeoutMs - (Date.now() - start) - 4000)
+        );
+        const startDeadline = Date.now() + startBudgetMs;
+        for await (const a of startStream) {
+          state.activityCount++;
+          // eslint-disable-next-line no-console
+          console.log(
+            `[cs] start activity #${state.activityCount} type=${a?.type} textLen=${a?.text?.length ?? 0} conv=${a?.conversation?.id ? String(a.conversation.id).slice(0, 8) : 'none'}`
+          );
+          if (a?.conversation?.id && !state.conversationId) {
+            state.conversationId = a.conversation.id;
+          }
+          // Exit as soon as we have a conversation id — we don't
+          // need the greeting.
+          if (state.conversationId) break;
+          if (Date.now() > startDeadline) break;
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[cs] startConversationStreaming threw', e);
+      }
+      // eslint-disable-next-line no-console
+      console.log(
+        `[cs] start done in ${Date.now() - startStartedAt}ms; conv=${state.conversationId ? String(state.conversationId).slice(0, 8) : 'none'}`
+      );
+    }
 
-    // Send the user's activity and consume the streaming reply until
-    // EndOfConversation. If we have no `conversationId` from a prior
-    // tool call, the SDK creates the conversation as part of this call.
+    // Step 2 — send the user's activity and consume the streaming
+    // reply until EndOfConversation.
     const sendStartedAt = Date.now();
     // eslint-disable-next-line no-console
     console.log(
