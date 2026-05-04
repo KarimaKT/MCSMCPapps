@@ -481,6 +481,205 @@ a sample.
 
 ---
 
+### 2.9 Static Adaptive Cards from a tool's `structuredContent` should render natively
+
+**Pain.** Copilot Studio agents routinely attach Adaptive Cards
+(`application/vnd.microsoft.card.adaptive`) to bot replies — info cards,
+image cards, citation cards, columns, fact lists. When that same agent
+is fronted by a DA + MCP App, the card payload is in `activity.attachments`
+on the CS Direct Engine response, but the M365 Copilot widget host has
+no native rendering primitive for "render this Adaptive Card". The
+widget maker has to bundle an Adaptive Cards renderer (~120 KB) into
+their widget, route the JSON through `structuredContent.adaptiveCards[]`,
+and re-implement theming.
+
+**Repro.**
+
+1. CS topic outputs an Adaptive Card via "Send a message" → "Add
+   message attachment" → Adaptive Card.
+2. Surface the agent through a DA + MCP App data-widget.
+3. Observe: card never renders. Either it's stripped from the activity
+   the SDK exposes, or it lands in `attachments` with no widget host
+   primitive to render it.
+
+**Ask.**
+
+1. Add a host-rendered surface for Adaptive Cards in `structuredContent`,
+   e.g. `_meta["m365copilot/adaptiveCards"]: [...]` — host renders these
+   above/below/inside the widget body.
+2. Or, document a canonical `structuredContent` shape the host
+   recognizes and renders without the widget needing its own
+   Adaptive Cards bundle.
+
+**Why it matters.** Adaptive Cards are the lingua franca for rich CS
+responses. Forcing every widget to re-bundle the renderer + re-theme
+to match host chrome is wasted effort and a 120 KB tax per widget.
+
+**Workaround.** Bundle `adaptivecards` into the widget; extract from
+`activity.attachments` server-side; theme manually. Documented in
+spec 0002.
+
+---
+
+### 2.10 Adaptive Card form submit needs a low-overhead postback path
+
+**Pain.** When a user fills an Adaptive Card form and clicks `Action.Submit`,
+the result needs to flow back to CS as an Activity with `value: <formData>`,
+not as a typed user message with `text: <stringified-form>`. CS topics
+that wait on a card response check `activity.value.<field>` for slot
+filling; if the data arrives as `text` it doesn't trigger the topic
+correctly and slot filling breaks.
+
+Today the only path from widget to CS is `window.openai.callTool('mySubmitTool', ...)`
+which then triggers a fresh tool call → host LLM pre-pass → MCP server →
+CS Direct Engine `sendActivityStreaming` → host LLM post-pass. The host
+LLM passes alone cost ~1.5 s per click; for a 4-step wizard, that's 6 s
+of pure LLM overhead the user pays for.
+
+**Repro.**
+
+1. CS topic: "What's your name?" → wait for card submit (4 fields).
+2. Surface through DA + MCP App.
+3. Build widget with Adaptive Cards renderer + form rendering +
+   `Action.Submit` handler that calls a `submitCardAction` tool.
+4. Time the click → next-card latency: ~3-5 s.
+
+**Ask.**
+
+1. **Direct widget-to-agent activity channel** (the strong fix). A new
+   `window.openai.postActivity({ value, text?, conversationId? })` API
+   that bypasses the host LLM and posts directly to the agent's
+   conversation. Host returns the agent's reply (next card / next text)
+   as a callback / promise. Latency drops to: serverless hop + CS
+   inference. No LLM tax.
+2. **App-mode bypass for postback** (combines with FR 2.8). When the
+   DA is in app-mode, all `tools/call` from the widget skip both
+   LLM passes and just do the round trip.
+
+**Why it matters.** Forms are the principal way CS topics gather
+structured input from users. Without low-overhead postback, every form
+field interaction is a 3-second wait, which makes multi-step wizards
+unusable.
+
+**Workaround.** Live with the latency. Pretend the submit button is "thinking."
+Documented in spec 0003.
+
+---
+
+## URGENT — Streaming and progressive disclosure
+
+### 5.1 Streaming partial replies don't reach the widget
+
+**Pain.** CS Direct Engine streams reply activities as they're produced
+(typing indicators, partial text chunks). In standalone CS that gives
+the user a "feels like ChatGPT" perception. In MCPApp, the tool
+response is a single `tools/call` JSON-RPC reply that has to wait for
+the full CS turn (drain to `EndOfConversation`) before returning. The
+widget mounts only after everything is collected. User sees no progress
+indicator beyond the M365 Copilot host's "Asking Eurozone Analyst…"
+spinner.
+
+**Repro.**
+
+1. CS topic that replies with 2 KB of generative answer.
+2. Standalone CS Test Pane: text streams in over ~3 s.
+3. MCPApp: spinner for ~3 s, then full text appears at once.
+
+**Ask.**
+
+- Streaming `tools/call` responses on the MCP wire (server → host →
+  widget). MCP supports server-sent partial results today; host needs to
+  forward them.
+- Or a `_meta["m365copilot/progressUpdate"]` postMessage channel
+  the widget can subscribe to.
+
+**Why it matters.** Streaming makes long replies bearable. Without it,
+any CS agent that produces >500 chars of generative content feels slow
+in MCPApp even when the underlying generation rate is the same.
+
+**Workaround.** None today. Documented in spec 0006.
+
+---
+
+## IMPORTANT — File handling
+
+### 6.1 No host primitive for "user clicks a download link in the widget"
+
+**Pain.** When CS returns an attachment (PDF, XLSX, image) with a
+`contentUrl`, the widget can render a button, but actually downloading
+the file from the widget context has friction:
+- `window.open(url)` is sandbox-blocked for non-`openExternal` schemes.
+- `<a download>` works for cross-origin URLs only with CORS headers
+  the file host might not send.
+- `openExternal(url)` opens a new browser tab (good for HTML viewers,
+  awkward for "save the PDF").
+
+**Ask.** Add `window.openai.downloadFile({ url, suggestedName, mimeType })`
+that the host honors as a real file download (browser save dialog).
+
+**Why it matters.** Many CS agents are explicitly designed to deliver
+documents (claim summaries, reports, contracts). Without a clean
+download primitive, the widget UX is worse than standalone CS.
+
+**Workaround.** Render `<a target="_blank" rel="noopener">` and hope
+the user knows to right-click → Save As. Documented in spec 0007.
+
+---
+
+### 6.2 No host primitive for "user uploads a file to the agent"
+
+**Pain.** Standalone CS surfaces support file upload (the input bar has
+an attachment button; CS receives the file as `attachments[]` on the
+incoming activity). The skybridge sandbox exposes nothing similar. A
+maker who needs "user uploads invoice → agent extracts line items" has
+no path.
+
+**Ask.** `window.openai.requestFileUpload({ accept: "image/*,application/pdf", maxBytes })`
+that returns a `Promise<{ blob, name, mimeType }>` after the host
+shows a native file picker. Widget can then base64-encode and pass
+the file via `tools/call`, or the host can stream it directly.
+
+**Why it matters.** Upload is the #1 missing capability for "claims",
+"expense", "support ticket" agents. Without it, MCPApp is permanently
+unsuitable for those scenarios.
+
+**Workaround.** Document the gap. Tell customers: file-upload
+scenarios stay in standalone CS (Power Apps embed, Teams app, custom
+website webchat) until this lands.
+
+---
+
+## NICE — Voice
+
+### 7.1 Voice input from M365 Copilot reaches the widget as text only
+
+**Pain.** When the user speaks into M365 Copilot, the host transcribes
+to text and that text becomes `userQuery` on the tool call. The widget
+sees no voice metadata (confidence, language, raw audio). Some CS
+agents are explicitly tuned for voice prosody (telephony bots).
+
+**Ask.** Optionally pass `_meta["m365copilot/inputMode"]: "voice"`
+and `_meta["m365copilot/recognizedLanguage"]: "en-US"` so the widget
++ CS can branch on voice-vs-text.
+
+**Why it matters.** Useful for accessibility, telephony parity. Low
+priority but cheap to add.
+
+---
+
+### 7.2 No TTS for the widget's response text
+
+**Pain.** Standalone CS / Bot Framework Web Chat support TTS for bot
+responses. MCPApp widgets have no TTS hook. Voice users get text
+output via the host's screen-reader at best.
+
+**Ask.** `window.openai.speak({ text, voice?, lang? })` host primitive
+that uses M365 Copilot's voice synthesizer.
+
+**Why it matters.** Accessibility + voice-first scenarios. Low priority.
+
+---
+
 ## NICE — Maker ergonomics
 
 ### 4.1 Teams Admin Center UX for declarative agents is obscure

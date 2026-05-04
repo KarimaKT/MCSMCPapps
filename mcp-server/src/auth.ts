@@ -61,6 +61,11 @@ export interface AuthContext {
   claims: JWTPayload;
   /** Raw inbound token, used as the assertion in the OBO exchange. */
   inboundToken: string;
+  /** All inbound request headers, lower-cased keys, for per-thread
+   *  cache key discovery (M365 Copilot may send a stable thread id
+   *  in some header — we don't know which yet, so the tool handler
+   *  scans known candidates). */
+  headers: Record<string, string>;
 }
 
 const storage = new AsyncLocalStorage<AuthContext | null>();
@@ -74,6 +79,14 @@ const storage = new AsyncLocalStorage<AuthContext | null>();
  * the tool handler. Cleared in a `finally` after the response closes.
  */
 let currentCtx: AuthContext | null = null;
+
+/**
+ * One-shot guard so we log the inbound request header set ONCE per
+ * process start. Used to discover whether M365 Copilot sends a stable
+ * per-thread / per-conversation id we could key caches on (see FR 2.8
+ * and the conversation-id discussion in [docs/CS-PARITY.md]).
+ */
+let loggedDiscoveryHeaders = false;
 
 /** Read the current request's auth context (null when feature is off). */
 export function getAuthContext(): AuthContext | null {
@@ -180,7 +193,29 @@ export function entraAuthMiddleware(
         audience: config.audience,
         issuer: expectedIssuer
       });
-      const ctx: AuthContext = { claims: payload, inboundToken: token };
+      // Snapshot inbound headers for the tool handler. Lower-case keys
+      // for case-insensitive scans.
+      const headers: Record<string, string> = {};
+      for (const [k, v] of Object.entries(req.headers)) {
+        if (typeof v === 'string') headers[k.toLowerCase()] = v;
+        else if (Array.isArray(v) && v.length) headers[k.toLowerCase()] = v[0];
+      }
+      // Log non-standard headers ONCE per process so we can discover
+      // what M365 Copilot sends. Skip noisy / irrelevant ones.
+      if (!loggedDiscoveryHeaders) {
+        loggedDiscoveryHeaders = true;
+        const interesting = Object.keys(headers).filter(
+          (k) =>
+            !['authorization', 'cookie', 'host', 'user-agent', 'accept', 'accept-encoding', 'accept-language', 'content-type', 'content-length', 'connection', 'cache-control', 'pragma'].includes(k) &&
+            !k.startsWith('sec-') &&
+            !k.startsWith('x-arr-')
+        );
+        // eslint-disable-next-line no-console
+        console.log('[auth] discovered request headers (one-time):', JSON.stringify(
+          Object.fromEntries(interesting.map((k) => [k, headers[k].slice(0, 80)]))
+        ));
+      }
+      const ctx: AuthContext = { claims: payload, inboundToken: token, headers };
       // eslint-disable-next-line no-console
       console.log(
         `[auth] token verified (sub=${payload.sub ?? '?'}, oid=${payload.oid ?? '?'})`

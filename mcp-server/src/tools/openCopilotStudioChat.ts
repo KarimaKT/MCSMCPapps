@@ -40,13 +40,7 @@ import { exchangeForPowerPlatformToken, getAuthContext, loadEntraConfig } from '
 import { callCsAgent } from '../cs.js';
 import type { ServerConfig } from '../config.js';
 import { UI_RESOURCE_URI } from '../resources/chatWidget.js';
-import {
-  getCachedPpToken,
-  setCachedPpToken,
-  getCachedConversationId,
-  setCachedConversationId,
-  clearCachedConversationId
-} from '../caches.js';
+import { getCachedPpToken, setCachedPpToken } from '../caches.js';
 
 /**
  * Build the `_meta` block shared between the tool descriptor and every
@@ -135,22 +129,31 @@ export function registerOpenCopilotStudioChatTool(
       const entra = loadEntraConfig();
       const ctx = getAuthContext();
       const t0 = Date.now();
-      // Use the user's Entra `oid` as the cache partition key. `oid` is
-      // a stable per-user GUID across sessions, so the PP token cache and
-      // CS conversation cache survive page refreshes / new chat sessions
-      // within the token's lifetime.
+      // Use the user's Entra `oid` for the PP token cache only. The
+      // CS conversation id is NOT cached server-side: we deliberately
+      // rely on the host echoing structuredContent.conversationId back
+      // as the conversationId argument. That gives us the right
+      // session semantics:
+      //   - Same M365 Copilot chat thread, follow-up turn:
+      //     host has the prior tool output in context → echoes
+      //     conversationId → CS conversation continues.
+      //   - User starts a NEW chat thread in M365 Copilot:
+      //     host has nothing to echo → no conversationId → we open a
+      //     fresh CS conversation. This matches user intent: "MCS
+      //     sessions should restart whenever the M365 Copilot DA
+      //     session restarts."
+      // The downside is that if the host model forgets to echo within
+      // a single thread (model drift, context truncation), CS topic
+      // state is lost mid-thread. The DA instructions hammer this
+      // rule hard, but ultimate fix is FR 2.8 (host-managed threadId).
       const oid =
         ctx && typeof ctx.claims.oid === 'string' ? ctx.claims.oid : null;
 
-      // If the host echoed a conversationId, prefer it. Otherwise fall
-      // back to the server-side cache (host LLMs are unreliable about
-      // echoing tool outputs back as inputs).
-      const cachedConvId = oid ? getCachedConversationId(oid) : null;
-      const effectiveConvId = inboundConversationId ?? cachedConvId ?? undefined;
+      const effectiveConvId = inboundConversationId;
 
       // eslint-disable-next-line no-console
       console.log(
-        `[tool] openCopilotStudioChat invoked: ssoEnabled=${Boolean(entra)} hasCtx=${Boolean(ctx)} userQueryLen=${userQuery.length} hostEchoedConv=${Boolean(inboundConversationId)} cachedConv=${Boolean(cachedConvId)} resume=${Boolean(effectiveConvId)}`
+        `[tool] openCopilotStudioChat invoked: ssoEnabled=${Boolean(entra)} hasCtx=${Boolean(ctx)} userQueryLen=${userQuery.length} hostEchoedConv=${Boolean(inboundConversationId)} resume=${Boolean(effectiveConvId)}`
       );
 
       // Pre-flight: must have Entra SSO + auth context to reach CS.
@@ -248,16 +251,9 @@ export function registerOpenCopilotStudioChatTool(
         `[tool] CS call done: ok=${cs.diag.ok} ms=${cs.diag.csCallMs} activities=${cs.diag.activityCount} replyLen=${cs.replyText.length}${cs.diag.error ? ' error=' + cs.diag.error : ''}`
       );
 
-      // Update / invalidate the conversation cache.
-      if (oid) {
-        if (cs.diag.ok && cs.conversationId) {
-          setCachedConversationId(oid, cs.conversationId);
-        } else if (effectiveConvId && !cs.diag.ok) {
-          // Likely the cached convId expired CS-side. Drop it so the
-          // next attempt starts a fresh conversation.
-          clearCachedConversationId(oid);
-        }
-      }
+      // No conversation-cache write: see the comment above
+      // `effectiveConvId` for why we deliberately do not persist
+      // CS conversation ids server-side.
 
       // Silent-dispatcher pattern. The widget displays the reply via
       // `structuredContent`; we don't want the host model to narrate or
@@ -289,7 +285,6 @@ export function registerOpenCopilotStudioChatTool(
             ...cs.diag,
             oboMs,
             oboCacheHit,
-            convCacheHit: Boolean(cachedConvId),
             hostEchoedConv: Boolean(inboundConversationId),
             totalMs: Date.now() - t0
           }
