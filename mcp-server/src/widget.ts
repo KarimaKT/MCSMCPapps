@@ -2,32 +2,36 @@
  * Widget HTML loader.
  *
  * Reads the single-file React bundle produced by
- * `webchat-ui/vite.widget.config.ts` and serves it as the body of the
- * `ui://mcsmcpapps/chat` resource (MIME `text/html+skybridge`).
+ * `webchat-ui/vite.widget-v2.config.ts` and serves it as the body of
+ * the `ui://mcsmcpapps/chat` resource (MIME `text/html+skybridge`).
  *
  * # Where the bundle lives
  *
- *   - **Local dev:** `webchat-ui/dist-widget/index.widget.html` (built by
- *     `npm run build:widget` in webchat-ui).
- *   - **App Service:** the deploy step copies the bundle into
- *     `mcp-server/dist/assets/widget.html`. This is the canonical runtime
- *     path. The CI workflow performs the copy.
+ *   - **App Service (canonical runtime path):** the deploy step copies
+ *     the bundle into `mcp-server/dist/assets/widget.html`. The CI
+ *     workflow performs the copy.
+ *   - **Local dev:** `webchat-ui/dist-widget-v2/index.widget-v2.html`
+ *     (built by `npm run build:widget-v2` in webchat-ui).
  *
- * We try a small list of candidate paths in order, log which one matched,
- * and cache the file contents in memory at startup. The file is small
- * (~5 MB) and never changes for a given deployment, so caching is safe.
+ * We try a small list of candidate paths in order, log which one
+ * matched, and cache the file contents in memory at startup. The file
+ * is small (~250 KB) and never changes for a given deployment, so
+ * caching is safe.
  *
  * # If no bundle is found
  *
  * The server logs a clear error and returns a minimal fallback HTML
  * explaining the missing-build situation. This makes "I forgot to run
- * `npm run build:widget`" easy to diagnose, instead of an empty card.
+ * `npm run build:widget-v2`" easy to diagnose, instead of an empty
+ * card.
  *
  * # Customization workflow for makers
  *
- * Maker editing `webchat-ui/src/widget/style-options.json` and rebuilding
- * the widget changes nothing in this file. The MCP server picks up the
- * fresh bundle on next process start.
+ * v0.6+ customization happens by editing
+ * `webchat-ui/src/widget-v2/main.tsx` directly and rebuilding. The
+ * MCP server picks up the fresh bundle on next process start. (The
+ * v0.5 BotFramework Web Chat `styleOptions` path described in older
+ * versions of WIDGET-CUSTOMIZATION.md is no longer used.)
  */
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -44,10 +48,11 @@ const CANDIDATES = [
   resolve(__dirname, '..', 'assets', 'widget.html'),
   // 2. v0.6 local dev — `npm run build:widget-v2` in webchat-ui.
   resolve(__dirname, '..', '..', 'webchat-ui', 'dist-widget-v2', 'index.widget-v2.html'),
-  resolve(__dirname, '..', '..', '..', 'webchat-ui', 'dist-widget-v2', 'index.widget-v2.html'),
-  // 3. v0.5 local dev fallback (chat-in-chat) — `npm run build:widget`.
-  resolve(__dirname, '..', '..', 'webchat-ui', 'dist-widget', 'index.widget.html'),
-  resolve(__dirname, '..', '..', '..', 'webchat-ui', 'dist-widget', 'index.widget.html')
+  resolve(__dirname, '..', '..', '..', 'webchat-ui', 'dist-widget-v2', 'index.widget-v2.html')
+  // v0.5 fallback paths (dist-widget/index.widget.html) were removed
+  // 2026-05-06. The v0.5 chat-in-chat bundle is incompatible with the
+  // skybridge sandbox (see ADR 0001) and falling back to it produced
+  // worse failure modes than the explicit fallbackHtml below.
 ];
 
 function loadFromDisk(): { path: string; html: string } | null {
@@ -71,7 +76,7 @@ function fallbackHtml(reason: string): string {
 </head><body>
 <h2>Widget bundle not found</h2>
 <p>${reason}</p>
-<p>Build the widget with <code>npm run build:widget</code> in <code>webchat-ui/</code>,
+<p>Build the widget with <code>npm run build:widget-v2</code> in <code>webchat-ui/</code>,
 then restart this server.</p>
 </body></html>`;
 }
