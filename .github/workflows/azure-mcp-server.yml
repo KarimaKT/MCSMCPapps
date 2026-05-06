@@ -58,6 +58,38 @@ jobs:
           cp webchat-ui/dist-widget-v2/index.widget-v2.html mcp-server/dist/assets/widget.html
           ls -lh mcp-server/dist/assets
 
+      # ----- Locked-contract smoke test (pre-deploy gate) -----
+      # Starts the built server with placeholder CS env vars and runs
+      # the MCP HTTP smoke test (init + tools/list + resources/list) to
+      # assert the locked contract surface (tool names, arg names/types/
+      # optionality, MIME, _meta.openai/outputTemplate). Drift here means
+      # the published manifest will silently break — fail the deploy.
+      # See docs/decisions/0005-arg-optionality-is-locked.md.
+      - name: Smoke test — locked contract
+        working-directory: mcp-server
+        env:
+          # Placeholders — smoke does init/list only, never calls CS.
+          CS_ENV_ID: 00000000-0000-0000-0000-000000000000
+          CS_SCHEMA: smoke_test
+          AGENT_NAME: SmokeAgent
+          AGENT_DESCRIPTION: smoke test
+          SWA_ORIGIN: https://example.invalid
+          PORT: '3001'
+        run: |
+          node dist/index.js &
+          SERVER_PID=$!
+          # Give the server a moment to bind.
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 1
+            if curl -sSf http://localhost:3001/ > /dev/null; then break; fi
+          done
+          set +e
+          node scripts/smoke-mcp.mjs http://localhost:3001/mcp
+          SMOKE_EXIT=$?
+          set -e
+          kill $SERVER_PID 2>/dev/null || true
+          exit $SMOKE_EXIT
+
       - name: Strip dev dependencies for the deployable artifact
         working-directory: mcp-server
         run: npm prune --omit=dev
