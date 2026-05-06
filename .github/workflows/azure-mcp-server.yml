@@ -10,6 +10,7 @@ on:
     paths:
       - 'mcp-server/**'
       - 'webchat-ui/**'
+      - 'declarative-agent/appPackage/ai-plugin.json'
       - '.github/workflows/azure-mcp-server.yml'
   workflow_dispatch:
 
@@ -84,7 +85,7 @@ jobs:
             if curl -sSf http://localhost:3001/ > /dev/null; then break; fi
           done
           set +e
-          node scripts/smoke-mcp.mjs http://localhost:3001/mcp
+          node scripts/smoke-mcp.mjs http://localhost:3001/mcp --manifest ../declarative-agent/appPackage/ai-plugin.json
           SMOKE_EXIT=$?
           set -e
           kill $SERVER_PID 2>/dev/null || true

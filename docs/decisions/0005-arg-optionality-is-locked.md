@@ -31,14 +31,29 @@ That commit flipped the Zod schema's `conversationId` field from
 manifest was already in production with the old schema and it would be a
 no-op for callers who passed empty strings.
 
-It was not a no-op. The published manifest v1.1.4 was admin-approved
-with `conversationId` declared **optional** in
-`runtimes[].spec.x-mcp_tool_description.tools[0].inputSchema`. The host
-LLM uses that admin-approved snapshot of the tool catalog to plan calls.
-After the server change, the live `tools/list` response said
-`conversationId` was required, while the host's cached catalog said
-optional. The mismatch confused the host model into emitting describe-
-the-tool text instead of an actual JSON-RPC `tools/call`.
+It was not a no-op. The published manifest v1.1.4 (and v1.1.5) was
+admin-approved with `conversationId` **not declared at all** in
+`runtimes[].spec.x-mcp_tool_description.tools[0].inputSchema` — only
+`userQuery` was listed, and not even marked `required`. The host LLM
+uses that admin-approved snapshot of the tool catalog to plan calls.
+After the v0.7.2e change, the live `tools/list` response said
+`conversationId` was required. The host's cached catalog had **never
+seen the field at all**. That mismatch confused the host model into
+emitting describe-the-tool text instead of an actual JSON-RPC
+`tools/call`.
+
+> **Update 2026-05-06.** This drift was discovered by the new
+> `--manifest` cross-check flag in `mcp-server/scripts/smoke-mcp.mjs`,
+> which compares the source `ai-plugin.json` against the server's
+> `tools/list`. Two pre-existing drifts surfaced: `userQuery` not
+> marked required in the manifest, and `conversationId` not declared
+> at all. Both were latent — host LLM happened to do the right thing
+> because the tool description told it what to pass. The manifest
+> source was fixed in the same commit that added
+> `submitAdaptiveCardAction` to the manifest (verified against
+> MS reference samples). Next publish must bump `manifest.json` from
+> 1.1.5 to 1.2.0 with admin re-approval. See PROGRESS.md "Next
+> publish" section.
 
 Compounding factor: the tool description and per-arg descriptions had
 ballooned to multi-paragraph DA-style prose. Long verbose tool

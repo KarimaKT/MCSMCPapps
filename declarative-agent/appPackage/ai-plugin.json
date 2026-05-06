@@ -8,6 +8,10 @@
     {
       "name": "openCopilotStudioChat",
       "description": "Always call this tool for every user message. Pass the user's text verbatim as userQuery. The tool returns a chat widget that owns the reply."
+    },
+    {
+      "name": "submitAdaptiveCardAction",
+      "description": "Posts an Adaptive Card form submit back to Eurozone Analyst. Call only when the widget reports an Action.Submit click."
     }
   ],
   "runtimes": [
@@ -17,7 +21,7 @@
         "type": "OAuthPluginVault",
         "reference_id": "MzAxNzU5YmMtNWJlMS00MGYxLThhNDQtODIyZTI4NmY1YTlkIyM0NGY2ZDM3OS1mYTJhLTRjMGUtYmM3OS04MGJhOWIxMDZmN2I="
       },
-      "run_for_functions": ["openCopilotStudioChat"],
+      "run_for_functions": ["openCopilotStudioChat", "submitAdaptiveCardAction"],
       "spec": {
         "url": "https://app-mcsmcpapps-mcp.azurewebsites.net/mcp",
         "x-mcp_tool_description": {
@@ -32,8 +36,13 @@
                   "userQuery": {
                     "type": "string",
                     "description": "The user's exact question, passed verbatim. The embedded analyst will treat it as the first user message in the conversation."
+                  },
+                  "conversationId": {
+                    "type": "string",
+                    "description": "Echo from the previous tool response's conversationId. Omit on the first call."
                   }
                 },
+                "required": ["userQuery"],
                 "additionalProperties": false
               },
               "annotations": {
@@ -46,6 +55,47 @@
                 "openai/widgetAccessible": true,
                 "openai/toolInvocation/invoking": "Opening Eurozone Analyst\u2026",
                 "openai/toolInvocation/invoked": "Eurozone Analyst ready."
+              }
+            },
+            {
+              "name": "submitAdaptiveCardAction",
+              "title": "Eurozone Analyst card submit",
+              "description": "Posts an Adaptive Card form submit back to Eurozone Analyst. Call only when the widget reports an Action.Submit click.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "conversationId": {
+                    "type": "string",
+                    "description": "CS conversation id from the prior tool response."
+                  },
+                  "value": {
+                    "type": "object",
+                    "description": "Form input values keyed by Adaptive Card input id.",
+                    "additionalProperties": true
+                  },
+                  "actionTitle": {
+                    "type": "string",
+                    "description": "Clicked Submit action title."
+                  },
+                  "actionData": {
+                    "type": "object",
+                    "description": "Optional Action.Submit data payload.",
+                    "additionalProperties": true
+                  }
+                },
+                "required": ["conversationId", "value"],
+                "additionalProperties": false
+              },
+              "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "openWorldHint": false
+              },
+              "_meta": {
+                "openai/outputTemplate": "ui://mcsmcpapps/chat",
+                "openai/widgetAccessible": true,
+                "openai/toolInvocation/invoking": "Submitting to Eurozone Analyst\u2026",
+                "openai/toolInvocation/invoked": "Eurozone Analyst replied."
               }
             }
           ]

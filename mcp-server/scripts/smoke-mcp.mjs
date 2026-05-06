@@ -47,14 +47,20 @@
 const url = process.argv[2];
 if (!url) {
   console.error(
-    'Usage: smoke-mcp.mjs <mcpUrl> [--call-userQuery <text>]\n' +
-      '  mcpUrl: the /mcp endpoint, e.g. http://localhost:3000/mcp'
+    'Usage: smoke-mcp.mjs <mcpUrl> [--call-userQuery <text>] [--manifest <path>]\n' +
+      '  mcpUrl:    the /mcp endpoint, e.g. http://localhost:3000/mcp\n' +
+      '  --manifest <path>: also assert the source ai-plugin.json declares\n' +
+      '                     the same tool set (catches manifest-vs-server drift).'
   );
   process.exit(2);
 }
 const callUserQuery =
   (process.argv.includes('--call-userQuery') &&
     process.argv[process.argv.indexOf('--call-userQuery') + 1]) ||
+  null;
+const manifestPath =
+  (process.argv.includes('--manifest') &&
+    process.argv[process.argv.indexOf('--manifest') + 1]) ||
   null;
 
 const bearer = process.env.MCP_BEARER || null;
@@ -214,6 +220,64 @@ if (chatResource) {
   );
 }
 console.log('');
+
+// ---------------------------------------------------------------------------
+// Manifest cross-check (optional, --manifest <path>)
+//
+// The published M365 app manifest snapshots the tool catalog at admin
+// approval time. The host LLM uses that snapshot to plan calls. If the
+// server's tools/list and the manifest's functions[] /
+// run_for_functions / x-mcp_tool_description.tools[] disagree, the
+// host will drop calls or emit args as plaintext (May-4 incident).
+// See docs/decisions/0005-arg-optionality-is-locked.md.
+// ---------------------------------------------------------------------------
+if (manifestPath) {
+  console.log(`manifest cross-check (${manifestPath})`);
+  const fs = await import('node:fs');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const functionsList = (manifest.functions ?? []).map((f) => f.name).sort();
+  const runtime = manifest.runtimes?.[0];
+  const runForFns = (runtime?.run_for_functions ?? []).slice().sort();
+  const xMcpTools = (
+    runtime?.spec?.['x-mcp_tool_description']?.tools ?? []
+  )
+    .map((t) => t.name)
+    .sort();
+  const serverTools = tools.map((t) => t.name).sort();
+
+  assert(
+    JSON.stringify(functionsList) === JSON.stringify(serverTools),
+    `manifest.functions[] === server tools/list (manifest=${functionsList.join(',')} vs server=${serverTools.join(',')})`
+  );
+  assert(
+    JSON.stringify(runForFns) === JSON.stringify(serverTools),
+    `manifest.runtimes[0].run_for_functions === server tools/list (manifest=${runForFns.join(',')} vs server=${serverTools.join(',')})`
+  );
+  assert(
+    JSON.stringify(xMcpTools) === JSON.stringify(serverTools),
+    `manifest.x-mcp_tool_description.tools[] === server tools/list (manifest=${xMcpTools.join(',')} vs server=${serverTools.join(',')})`
+  );
+
+  // Per-tool input schema cross-check: assert each manifest tool's
+  // required[] matches what the server reports.
+  for (const mTool of runtime?.spec?.['x-mcp_tool_description']?.tools ?? []) {
+    const sTool = tools.find((t) => t.name === mTool.name);
+    if (!sTool) continue;
+    const mRequired = (mTool.inputSchema?.required ?? []).slice().sort();
+    const sRequired = (sTool.inputSchema?.required ?? []).slice().sort();
+    assert(
+      JSON.stringify(mRequired) === JSON.stringify(sRequired),
+      `${mTool.name}.required[] manifest vs server (manifest=[${mRequired.join(',')}] vs server=[${sRequired.join(',')}])`
+    );
+    const mProps = Object.keys(mTool.inputSchema?.properties ?? {}).sort();
+    const sProps = Object.keys(sTool.inputSchema?.properties ?? {}).sort();
+    assert(
+      JSON.stringify(mProps) === JSON.stringify(sProps),
+      `${mTool.name} property names manifest vs server (manifest=[${mProps.join(',')}] vs server=[${sProps.join(',')}])`
+    );
+  }
+  console.log('');
+}
 
 // ---------------------------------------------------------------------------
 // tools/call (only if user opted in via --call-userQuery)
