@@ -1,9 +1,10 @@
 /**
  * `McpServer` factory.
  *
- * Builds a fresh `McpServer` per session and wires up the tools and
- * resources. Adding a new tool / resource = add a registration call here
- * plus a sibling file under `tools/` or `resources/`.
+ * Builds a fresh `McpServer` per request (the transport is stateless —
+ * see index.ts) and wires up the tools and resources. Adding a new
+ * tool / resource = add a registration call here plus a sibling file
+ * under `tools/` or `resources/`.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -23,10 +24,11 @@ const SERVER_INSTRUCTIONS =
   'can answer immediately without waiting for the user to retype.';
 
 /**
- * Create an `McpServer` configured for a single session.
+ * Create an `McpServer` configured for a single request.
  *
- * The server has no shared state — each session builds its own. This keeps
- * sessions isolated and lets the HTTP host close them independently.
+ * The server has no shared state — each request builds a fresh instance.
+ * Construction is sub-millisecond (just function registrations); see
+ * index.ts and ADR 0002 for why the transport is stateless.
  */
 export function buildServer(config: ServerConfig): McpServer {
   const server = new McpServer(

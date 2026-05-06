@@ -108,15 +108,15 @@ MCSMCPapps/
 
 ## Status & roadmap
 
-- ✅ **v0.6.x** — foundations (Entra SSO, OBO, PP token cache, header-keyed conversation continuity, silent dispatcher pattern)
-- ✅ **v0.7.0** — Adaptive Cards static rendering, Markdown, fullscreen analyst canvas with Copy/Print
+- ✅ **v0.6.x** — data-widget pivot, Entra SSO + server-side OBO, per-thread conversation cache, silent dispatcher
+- ✅ **v0.7.0** — Adaptive Cards (static), Markdown, fullscreen analyst canvas with Copy/Print
 - ✅ **v0.7.1** — Adaptive Card `Action.Submit` + form inputs end-to-end
-- ✅ **v0.7.2** — Suggested actions / quick replies
-- 🔄 **v0.7.3** — Hand-off to live agent (D365 Omnichannel)
+- ✅ **v0.7.2** — Suggested actions / quick replies (with v0.7.2e regression + v0.7.3a recovery — see [ADR 0005](docs/decisions/0005-arg-optionality-is-locked.md))
+- 🔄 **v0.7.3** — Hand-off to live agent (D365 Omnichannel). Server-side detection landed (additive, safe to deploy); widget banner pending. See [spec 0004](docs/specs/0004-escalation-detection.md).
 - 🔜 **v0.7.4** — Streaming partial replies (FR 5.1 dependency)
 - 🔜 **v0.8** — File downloads, voice gaps documented
 
-See [docs/PROGRESS.md](docs/PROGRESS.md) for the full log.
+Latest manifest published to CDX: **v1.1.5**. See [docs/PROGRESS.md](docs/PROGRESS.md) for the full log and [docs/CS-PARITY.md](docs/CS-PARITY.md) for the 32-row capability matrix.
 
 ## Contributing & feature requests
 
