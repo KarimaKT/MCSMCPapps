@@ -1,6 +1,8 @@
 # Authentication architecture
 
 > The single hardest thing about this pattern is keeping straight which auth boundary applies to which actor. This doc is the authoritative answer. Every other doc points here.
+>
+> **Current production mode is "Entra SSO + server-side OBO" (the second row of the table below).** The "Anonymous MCP + browser MSAL" mode is kept for local dev and for the standalone SWA channel; do not deploy it into M365 Copilot — it fails inside the skybridge sandbox per [ADR 0001](decisions/0001-chat-in-chat-was-wrong.md).
 
 ## Two operating modes
 

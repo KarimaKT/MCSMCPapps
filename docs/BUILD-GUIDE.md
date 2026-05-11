@@ -1,5 +1,7 @@
 # Build Guide — MCSMCPapps (no AI required)
 
+> **⚠️ STALE — covers the v0.5 build sequence.** The phase structure (WebChat first, then MCP wrapper, then DA) was designed for the chat-in-chat architecture retired in v0.6 ([ADR 0001](decisions/0001-chat-in-chat-was-wrong.md)). Many infrastructure steps (Azure subscription, App Service, SWA, Bicep, GitHub Actions) are still accurate, but the application-level steps (browser MSAL, BotFramework Web Chat, iframe of SWA from the MCP resource) are obsolete. **For a fresh setup, follow [QUICK-START.md](QUICK-START.md) instead.** Use this file only as a deep reference if you hit something the quick-start doesn't cover.
+
 > Step-by-step instructions to reproduce this project from scratch on a clean Windows machine. Every step is manual; no Copilot or AI tooling is required to follow it. Tested against the package versions pinned in this repo.
 >
 > **Estimated time:** 4–6 hours, including Azure provisioning and tenant configuration. **Reading time only:** ~30 min.

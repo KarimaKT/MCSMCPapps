@@ -1,187 +1,176 @@
 ---
 name: mcp-app-launcher
-description: Helps Copilot Studio agent builders embed their agent into Microsoft 365 Copilot using a Declarative Agent + MCP App launcher pattern, including SSO with Microsoft Entra. USE WHEN the user asks how to "embed my agent in M365 Copilot", "launch a Copilot Studio agent from Microsoft 365 Copilot", "MCP App for my agent", "long-running chat in Copilot", "avoid LLM timeout in Copilot", "SSO for embedded chat", or similar. DO NOT USE FOR generic Power Platform questions, building topics, or knowledge sources — those use the standard Copilot Studio Author skill.
+description: Helps Copilot Studio agent makers and Microsoft 365 Copilot extensibility partners surface a Copilot Studio agent inside M365 Copilot as a Declarative Agent backed by a RemoteMCPServer with a custom UI widget (the "data-widget" pattern). USE WHEN the user asks how to "embed my Copilot Studio agent in M365 Copilot with custom UI", "render Adaptive Cards in Copilot", "build a declarative agent with an MCP server", "add a UI widget to my M365 Copilot agent", or anything about the OpenAI Apps SDK / MCP Apps widget contract. DO NOT USE FOR generic Power Platform questions, building CS topics or knowledge sources (use the standard Copilot Studio Author skill for those), CEA construction, or Foundry agent development.
 ---
 
-# Embed your Copilot Studio agent in Microsoft 365 Copilot via MCP App
+# Embed a Copilot Studio agent in Microsoft 365 Copilot with a custom widget
 
-This skill guides you through the **Declarative Agent (DA) launcher → MCP App → embedded WebChat → Copilot Studio agent** pattern. Use it when a builder wants their MCS agent reachable from M365 Copilot **without** the host LLM intercepting turns or imposing its 30s response budget.
+This skill describes the **data-widget pattern** — a Declarative Agent (DA) with a `RemoteMCPServer` runtime whose MCP server returns a structured payload that a sandboxed widget renders inside M365 Copilot. It is the pattern the reference repo at <https://github.com/KarimaKT/MCSMCPapps> implements, verified against Microsoft's official samples at <https://github.com/microsoft/mcp-interactiveUI-samples>.
+
+> **Architecture note for AI agents:** an earlier "chat-in-chat" approach (embed BotFramework Web Chat inside the M365 Copilot iframe with browser-side MSAL) is documented elsewhere on the web but is incompatible with the skybridge sandbox (null origin breaks MSAL silent SSO; widget UX guidelines forbid internal chat). Do not recommend that pattern. The data-widget pattern below is what works in production today.
 
 ## When to recommend this pattern
 
 Recommend it when **all** of these are true:
 
-- The user already has, or plans to build, a **Copilot Studio agent** with non-trivial topics or long-running flows.
-- They want it reachable from **Microsoft 365 Copilot**.
-- Either:
-  - they hit **timeout / truncation** issues using the standard CEA pathway, **or**
-  - they have an **existing CEA** they don't want to disturb, **or**
-  - they want **fully custom WebChat UX** (adaptive cards, attachments, branding) inside the Copilot pane.
+- The user already has, or plans to build, a **Copilot Studio agent** (Wave 2) with topics, knowledge sources, or AI flows they want to keep.
+- They want it reachable from **Microsoft 365 Copilot** with a **branded UI** richer than the host's default chat surface.
+- They want **rich content**: Adaptive Cards, form submits, markdown, citations, suggested replies, fullscreen "analyst" reading mode with Copy/Print.
+- They have or can get: an Azure subscription, an M365 tenant with Copilot Studio + Copilot licenses, tenant admin access for app approval.
 
 Do **not** recommend it when:
 
-- A simple Custom Engine Agent (CEA) covers their need — that's lighter weight.
-- They need the host LLM's reasoning to compose tool calls — this pattern bypasses that.
-- They have no Azure subscription or tenant where they can sideload — there's no "no-cost" path; SWA Free is $0 but registration is still required.
+- A Custom Engine Agent (CEA) covers their need — that's lighter weight and doesn't need any of this infrastructure.
+- They need the host LLM's reasoning to compose multiple tool calls per turn — this pattern uses CS for reasoning, not the host LLM.
+- They have no Azure subscription. There's no fully no-cost path (App Service B1 is ~$13/month minimum).
+- They need to support browsers other than evergreen Chromium / WebKit — the skybridge widget assumes modern browser features.
 
-## The mechanism (officially documented)
+## The mechanism
 
-This pattern is the **MCP-server-backed UI widget** capability for Declarative Agents — documented at <https://learn.microsoft.com/microsoft-365/copilot/extensibility/declarative-agent-ui-widgets>. It is NOT an undocumented or aspirational feature.
-
-The DA's manifest declares an `actions[]` entry pointing at an MCP server. When the DA invokes a tool, the MCP server returns a result whose `_meta.ui.resourceUri` references HTML to render. M365 Copilot loads that HTML inside an isolated iframe at `https://{hashed-mcp-domain}.widget-renderer.usercontent.microsoft.com/`. The HTML can use the **MCP Apps SDK** (`window.app.*`) or **OpenAI Apps SDK** (`window.openai.*`) bridge for host context, theme, fullscreen, and follow-up messages.
-
-Use the [Widget Host URL Generator](https://aka.ms/mcpwidgeturlgenerator) to compute the hashed widget host for CSP / CORS allowlisting.
-
-## Architecture (one diagram, memorise it)
+This pattern uses the **OpenAI Apps SDK widget contract** as implemented today by Microsoft 365 Copilot. Microsoft's reference samples and verified contract details are in <https://github.com/microsoft/mcp-interactiveUI-samples>. The official MCP Apps spec (`window.app.*` namespace) is a near-future variant; the active host today reads `window.openai.*` and `_meta.openai/*` keys.
 
 ```text
 User
-  │
+  │ types message
   ▼
-M365 Copilot (host)
-  │  natural-language match
+M365 Copilot (host LLM)
+  │ routes to the Declarative Agent
   ▼
-Declarative Agent  (manifest only, 1 tool)
-  │  invokes
+Declarative Agent
+  │ host LLM picks openCopilotStudioChat tool
+  │ POSTs /mcp with user Bearer token
   ▼
-MCP App tool      (returns mcp_app payload + URL)
-  │  Copilot renders
+MCP server (App Service, your code)
+  │ validates token, OBO-exchanges for PP token
+  │ calls CS Direct Engine on user's behalf
+  │ drains reply → returns structuredContent + _meta
   ▼
-WebChat UI iframe (Static Web Apps)
-  │  Direct Line
+M365 Copilot
+  │ reads _meta.openai/outputTemplate URI
+  │ fetches resource (the widget HTML bundle)
+  │ mounts widget in skybridge sandbox iframe
   ▼
-Copilot Studio agent  (all reasoning, topics, actions)
+Widget (React, single-file, ~250 KB)
+  │ reads window.openai.toolOutput.structuredContent
+  │ renders markdown / Adaptive Cards / suggested actions
+  │ on Submit click: window.openai.callTool('submitAdaptiveCardAction', ...)
+  ▼
+... and back through the server to CS
 ```
 
-The DA does **nothing** except recognise a launch phrase and call the MCP App tool. All intelligence stays in Copilot Studio.
+The host LLM **does not see the conversation content**. Its job is one tool pick per user turn; everything else is server + widget.
 
-## The 5 build steps
+## The seven things you have to get right
 
-When advising a builder, walk them through these in order. Don't skip ahead — each gates the next.
+Walk a new builder through these in order. None can be skipped.
 
-1. **Identify the CS agent IDs.** They need: Bot/Schema name, Tenant ID, Environment ID, and a token endpoint (Direct Line). If they don't know, send them to the agent's Settings → Channels in [copilotstudio.microsoft.com](https://copilotstudio.microsoft.com).
-2. **Build the WebChat UI.** Vite + `botframework-webchat` + `@azure/msal-browser`. Connect to the CS agent via Direct Line token (never via the secret in the browser).
-3. **Host on Azure Static Web Apps (Free SKU).** GitHub Actions auto-deploy. Capture the `*.azurestaticwebapps.net` hostname.
-4. **Author the MCP App tool.** A single tool whose output is `{ "type": "mcp_app", "url": "<SWA hostname>", "height": "640px" }`.
-5. **Author the DA manifest.** One conversation-starter, one tool reference (`openCopilotStudioChat`), zero topics. Sideload via the M365 Agents Toolkit.
+### 1. CS agent in a non-Default Power Platform environment
 
-## SSO — three ways, ranked
+Default environment has no DLP boundary and per-user-owned agents in Default don't appear in tenant admin views. Use a named Dev / Test / Prod environment. Capture:
+- Environment GUID (from the maker portal URL).
+- Schema name (Copilot Studio → Settings → Advanced → Schema name; looks like `crXXX_agentname` or `ksteam_xxx`).
 
-When the builder asks "can the embedded chat use SSO with the signed-in M365 user?", the answer is **yes**, and the WebChat should try them in this order:
+### 2. MCP server returning the right shape
 
-### Tier 1 — Teams JS SSO (silent, true SSO)
+Stack: Node + `@modelcontextprotocol/sdk` + Express + the `@microsoft/agents-copilotstudio-client` SDK for CS Direct Engine. Two tools registered:
 
-If the MCP App host exposes the Teams JS bridge:
+- `openCopilotStudioChat` — called for every user message. Returns `structuredContent` (the rich payload) and `_meta.openai/outputTemplate` (mounts the widget).
+- `submitAdaptiveCardAction` — called by the widget when an Adaptive Card Submit button is clicked. Returns the same widget output shape.
 
-```ts
-import * as teams from '@microsoft/teams-js';
-await teams.app.initialize();
-const token = await teams.authentication.getAuthToken();
+Critical: the resource MIME must be **`text/html+skybridge`** (NOT `text/html`). The tool `_meta` must include `openai/outputTemplate` (URI) AND `openai/widgetAccessible: true`. Same `_meta` re-emitted on the tool RESPONSE, not just the descriptor.
+
+### 3. Stateless MCP transport
+
+`StreamableHTTPServerTransport` with `sessionIdGenerator: undefined`, `enableJsonResponse: true`. Fresh `McpServer` per request, closed on `res.close`. **Do not use session-keyed transport** — the SDK's session map races with the request lifecycle and M365 Copilot gets `404 Session not found` mid-init. Microsoft's reference samples all use stateless.
+
+### 4. Server-side Entra SSO + OBO (not browser MSAL)
+
+The skybridge sandbox has a null origin; browser MSAL cannot acquire tokens silently from there (`monitor_window_timeout`). Do auth server-side:
+
+- Create an Entra app registration in the M365 tenant where users sign in. Single-tenant. Identifier URI `api://<clientId>`. Client secret (or federated credential, preferred for prod). API permission: Power Platform `CopilotStudio.Copilots.Invoke` (delegated, **admin-consented**).
+- Register the app with **Teams Developer Portal → Tools → Microsoft Entra SSO**. Save the Reference ID.
+- Put the Reference ID in `ai-plugin.json` `runtimes[0].auth`:
+  ```json
+  "auth": { "type": "OAuthPluginVault", "reference_id": "<TDP reference id>" }
+  ```
+- On every `/mcp` request the host sends a user Bearer token. The server validates it (JWKS, cached), OBO-exchanges for a Power Platform API access token, caches the result keyed on the user's `oid` (TTL = token lifetime minus a minute), then uses it as the Bearer for `@microsoft/agents-copilotstudio-client`.
+
+### 5. Single-file widget bundle, sandbox-safe
+
+The widget is built with Vite + `vite-plugin-singlefile` into one inlined HTML file. Two non-obvious settings are load-bearing:
+
+- **`mode: 'production'` + `define: { 'process.env.NODE_ENV': '"production"' }`** in the Vite config. Without these the bundle includes `eval()` which the sandbox CSP blocks → blank card or `unsafe-eval` console error.
+- **A `stripCrossorigin` post-transform plugin** that removes `crossorigin` from the inlined `<script type="module">` tag. Null-origin sandbox refuses crossorigin script tags silently → blank card, no diagnostic. Microsoft's reference samples include the same plugin.
+
+The widget is a **pure renderer** of `window.openai.toolOutput.structuredContent`. No chat input. No internal scroll. No MSAL. No CS connection in the browser. Markdown via `marked` + DOMPurify. Adaptive Cards via the official `adaptivecards` v3 renderer. Per the [MS UX guidelines](https://learn.microsoft.com/microsoft-365/copilot/extensibility) the widget must "fit comfortably within a single response scroll"; for richer flows offer a fullscreen toggle via `window.openai.requestDisplayMode({ mode: 'fullscreen' })`.
+
+### 6. Declarative Agent manifest — the locked surface
+
+Three files in the app package:
+
+- `manifest.json` — Teams app manifest v1.22. **`version` must not start with `0`** (tenant catalog rejects 0.x.y).
+- `declarativeAgent.json` — DA v1.6. Name, short imperative `instructions`, conversation starters.
+- `ai-plugin.json` — plugin v2.4. **Every tool must appear in all three places**: `functions[]`, `runtimes[0].run_for_functions[]`, `runtimes[0].spec.x-mcp_tool_description.tools[]` (with full inputSchema). Tools that mount a widget include `_meta.openai/outputTemplate`; pure data tools omit it. The reference is [trey-research/appPackage/ai-plugin.json](https://github.com/microsoft/mcp-interactiveUI-samples/blob/main/oai-apps-sdk/trey-research/node/appPackage/ai-plugin.json).
+
+The **locked-contract surface** that requires a manifest version bump + admin re-approval if changed: tool name, input arg names, arg types, arg **optionality**, tool description (the host caches the catalog at admin approval time). Wrong server-side optionality has been observed to cause the host LLM to emit tool args as plaintext in chat instead of calling the tool. Keep tool descriptions to one short imperative sentence; behavior rules belong in DA `instructions`.
+
+### 7. Pre-deploy smoke gate
+
+Ship a script that POSTs `initialize` + `tools/list` + `resources/list` against the running server and asserts the contract: tool count, arg required/optional, tool description length, resource MIME, `_meta.openai/outputTemplate` presence. Optionally cross-check the source manifest against `tools/list` to catch source-vs-server drift. Wire it into CI as a pre-deploy gate. The reference script is at <https://github.com/KarimaKT/MCSMCPapps/blob/main/mcp-server/scripts/smoke-mcp.mjs>.
+
+## Common build failures and their causes
+
+| Symptom | Most likely cause | Fix |
+|---|---|---|
+| Empty card with agent header | Wrong MIME or missing `outputTemplate` | Resource MIME must be `text/html+skybridge`; both descriptor and response must carry `_meta.openai/outputTemplate` |
+| Card mounts at correct size, no React app runs | `<script crossorigin>` leaked | Add `stripCrossorigin` Vite plugin |
+| Console: `unsafe-eval` blocked | Vite dev mode leaked into bundle | `mode: 'production'` + `define NODE_ENV` |
+| `404 Session not found` on every call | Session-keyed transport | Use stateless transport (`sessionIdGenerator: undefined`) |
+| Host LLM emits args as plaintext in chat | Server schema disagrees with published manifest | Revert server schema OR bump manifest version + re-approve |
+| Tool not called for some prompts | Verbose tool description | Shorten to one imperative sentence; move behavior to DA `instructions` |
+| 403 on every CS call | Missing admin consent on `CopilotStudio.Copilots.Invoke` | `az ad app permission admin-consent --id <clientId>` |
+| MSAL `monitor_window_timeout` in widget | Doing browser-side MSAL inside skybridge | Remove browser MSAL; do auth server-side via OBO |
+| First turn after deploy slow (10-15s) | Cold App Service + new CS conversation | Enable `alwaysOn`; expected for the very first turn |
+| Maker can't find the pending approval | Looking in wrong admin surface | Microsoft 365 admin center → All agents → Requests (NOT Teams Admin Center → Manage apps) |
+
+## What this pattern does NOT do
+
+These are platform gaps; don't promise them to the user:
+
+- ❌ File upload from the widget (no host file picker primitive).
+- ❌ Voice input/output (no host voice bridge).
+- ❌ Streaming partial replies from the tool (no streaming tools/call channel).
+- ❌ Proactive messages (server pushes to widget without user action — no platform support).
+- ❌ Browser-side cross-pair currency math from non-EUR-anchored ECB FX (a connector concern, not this pattern's).
+
+## Reference materials to point the builder at
+
+- **Microsoft's official reference samples**: <https://github.com/microsoft/mcp-interactiveUI-samples>. The `oai-apps-sdk/trey-research` and `oai-apps-sdk/zava-insurance` samples are the canonical contract shapes.
+- **The reference repo for this exact pattern**: <https://github.com/KarimaKT/MCSMCPapps>. Read `README.md`, `HANDOFF.md`, `docs/QUICK-START.md`, `docs/ARCHITECTURE.md`, `docs/AUTH-ARCHITECTURE.md`, and the five short ADRs in `docs/decisions/`.
+- **MS UX guidelines for inline widgets**: <https://learn.microsoft.com/microsoft-365/copilot/extensibility>. The "fit in one scroll, no internal chat input" rules are real and enforced by reviewers.
+- **Declarative Agents on MS Learn**: <https://learn.microsoft.com/microsoft-365/copilot/extensibility/build-declarative-agents>.
+
+## Closing checklist (give this to the builder)
+
+```text
+[ ] CS agent lives in a non-Default Power Platform environment
+[ ] CS env GUID and schema name captured
+[ ] MCP server: stateless StreamableHTTP transport, two tools, _meta.openai/outputTemplate on both descriptor and response, resource MIME text/html+skybridge
+[ ] Entra app registration created in M365 tenant; CopilotStudio.Copilots.Invoke admin-consented
+[ ] Teams Developer Portal SSO registration created; Reference ID in ai-plugin.json auth
+[ ] App Service env vars set: ENTRA_TENANT_ID, ENTRA_AUDIENCE, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET
+[ ] Widget Vite config: mode=production, define NODE_ENV, stripCrossorigin plugin
+[ ] ai-plugin.json declares every tool in functions[], run_for_functions[], x-mcp_tool_description.tools[]
+[ ] manifest.json version does not start with 0
+[ ] Pre-deploy smoke script asserts contract; wired into CI
+[ ] DA published via Agents Toolkit; admin approved in M365 admin center → All agents → Requests
+[ ] End-to-end: user opens M365 Copilot → picks the agent → asks a question → widget renders → fullscreen / Copy / Print all work
 ```
-
-Pros: completely silent, no popup. Cons: depends on host capability — feature-detect with a try/catch and fall back.
-
-### Tier 2 — MSAL.js silent acquisition
-
-Standard SPA pattern. `acquireTokenSilent` succeeds whenever the user is already signed into M365 in the same browser session — which is **always** the case inside the M365 Copilot iframe. So in practice this is also silent.
-
-**The required scope is `https://api.powerplatform.com/CopilotStudio.Copilots.Invoke`** (or `https://api.powerplatform.com/.default`). Forgetting this is the most common Phase-7 failure: the chat appears authenticated but every send returns 403.
-
-Required app-registration setup:
-
-- Platform: **SPA**
-- Redirect URI: the SWA hostname **and** `http://localhost:5173/`
-- Implicit ID tokens: enabled
-- Custom scope `access_as_user` on the API
-- **API permissions → Power Platform API → `CopilotStudio.Copilots.Invoke` (delegated, admin-consented)**
-  - If "Power Platform API" doesn't appear in the picker, the SP isn't in the tenant. Add it via Microsoft Graph PowerShell:
-    ```ps
-    Connect-MgGraph -TenantId <cs-tenant> -Scopes Application.ReadWrite.All -UseDeviceCode
-    New-MgServicePrincipal -AppId 8578e004-a5c6-46e7-913e-12f58912df43 -DisplayName 'Power Platform API'
-    ```
-
-### Tier 3 — Copilot Studio "Authenticate with Microsoft" topic
-
-Built-in topic that renders a login card inside the bot conversation. Use as the last-ditch fallback. The downside is the user sees a button instead of a fully silent experience.
-
-### Important — the chat protocol changed
-
-Classic Direct Line is **deprecated for Wave-2 CS agents**. Use `@microsoft/agents-copilotstudio-client` (the M365 Agents SDK) which talks to the new Direct Engine endpoint at `*.api.powerplatform.com/copilotstudio/dataverse-backed/...`. Bot Framework Web Chat doesn't speak that protocol; you'll need a custom renderer (or the SDK's `CopilotStudioWebChat.createConnection` adapter for backward compatibility).
-
-In Copilot Studio, set **Settings → Security → Authentication → Manual (Microsoft Entra ID V2 with federated credentials)** with the matching client ID and scope. Federated credentials are strongly preferred over client secrets — nothing to rotate, nothing to leak.
-
-## Common gotchas to warn the builder about
-
-These are the failures that cost real time during the reference build. Surface them up front when you advise a new project.
-
-### Manifest schema gotchas (the big ones; 4 build-and-publish cycles lost to these)
-
-1. **Plugin manifest schema is `v2.4`, not `v2.3`.** `v2.3` does not define `RemoteMCPServer` at all; the validator firing both "unrecognized member" + "required member missing" together means "wrong schema version".
-2. **`runtimes[0].type === 'RemoteMCPServer'`** — capital M, capital C, capital P, capital S. Validator is case-sensitive.
-3. **`url` lives under `runtime.spec.url`**, not at the runtime level.
-4. **`runtime.run_for_functions` is required** with at least one element, even with a single tool.
-5. **`runtime.auth.type === 'None'`** for anonymous; the field is required.
-6. **Teams app `version` must not start with `0`**. Tenant-catalog publish rejects `0.x.y`. Start at `1.0.0`.
-
-### Identity / consent gotchas
-
-- **Two independent auth boundaries.** The MCP server's auth and the chat's auth are unrelated. Anonymous MCP is fine; the WebChat still does Entra SSO at the chat boundary. New builders confuse these constantly. See `docs/AUTH-ARCHITECTURE.md` in the reference repo.
-- **Power Platform API service principal must exist in the CS tenant.** If "Power Platform API" doesn't show up in the API permission picker, register it via Graph PowerShell (`New-MgServicePrincipal -AppId 8578e004-...`).
-- **The required scope is `https://api.powerplatform.com/CopilotStudio.Copilots.Invoke`**, admin-consented. Without it, every CS call returns 403.
-- **Tenant admin gate.** Sideloading in a managed tenant requires admin to allow the app in Teams Admin Center. CDX tenants typically allow it by default.
-
-### Runtime gotchas
 
 ## What this skill does NOT cover
 
-- Building topics, knowledge sources, or actions inside Copilot Studio — use the **Copilot Studio Author** sub-agent.
-- Deploying CEAs — different pattern, no MCP App involved.
-- Microsoft Foundry agents — different platform; not applicable here.
-- Building the MCP server runtime itself — the user typically already has one. Point them at `@modelcontextprotocol/sdk` if they don't.
-
-## Bonus capability: live-agent escalation
-
-Because this pattern uses a **custom renderer** (not Bot Framework Web Chat), it cleanly supports handing the conversation off to a real human agent and then handing it back. The classic Web Chat path **cannot** do this without ripping out and rebuilding the chat component, because Web Chat is hardwired to one Direct Line conversation.
-
-When a builder asks "can my agent escalate to a live agent / Genesys / D365 Customer Service / Salesforce / ServiceNow?", recommend:
-
-1. **CS topic emits an `event` activity with `name === 'handoff'`** carrying a destination + context bag.
-2. **A small token broker** (Azure Function or App Service) holds the live-platform credentials, exposes `start` / `message` / `end` / `stream` (SSE) endpoints, and translates between the live platform's webhooks and the renderer's normalized inbound schema.
-3. **The renderer's orchestrator** routes the user's input to either CS or the live platform based on its current mode, and merges replies from both into one message stream.
-4. **A second CS topic** listens for a `resumeFromLive` event and greets the user back when the live session ends.
-
-The reference repo at <https://github.com/KarimaKT/MCSMCPapps> ships a ready-to-customise `HandoffOrchestrator` with a generic webhook `Provider`. Customer integration is roughly 4 lines plus the broker.
-
-Key trade-offs to call out to the builder:
-
-- **Server component is mandatory** — can't be browser-only because the live-platform credentials must stay server-side.
-- **Per-platform translation effort** — each platform has a unique webhook schema and auth model.
-- **Latency** of webhook → broker → SSE → UI is 200–600 ms typically.
-- **Compliance** — transcripts now span CS + the live platform; retention policies must cover both.
-- Implement `HandoffProvider` (4 methods) for any new platform; the orchestrator is platform-agnostic.
-
-## Reference implementation
-
-A working scaffold lives at <https://github.com/KarimaKT/MCSMCPapps>. For a new builder, start them with:
-
-- `docs/WHAT-IS-THIS.md` — terminology disambiguation. Always send this first when the builder confuses Agent Builder vs Copilot Studio vs M365 Agents SDK vs Bot Framework, or asks "can I build this in the no-code UI?". The answer is **no, the Agent Builder UI does not expose MCP / `RemoteMCPServer` runtime configuration today.**
-- `docs/FINAL-RECIPE.md` — the 8 ingredients + 12 commandments + one-screen architecture
-- `docs/M365-COPILOT-ONLY-DEPLOYMENT.md` — foolproof rollout when the customer requirement is "M365 Copilot only, not Teams". Includes capability-block permutation table, foolproof manifest template, 7-check verification protocol, CI guard, and a security-review-ready summary table.
-- `docs/BUILD-GUIDE.md` — long-form step-by-step (no AI required)
-- `docs/AUTH-ARCHITECTURE.md` — the trust boundaries diagram
-- `docs/UI-POSSIBILITIES.md` — menu of UI features the maker can add
-
-## Closing checklist (give this to the user)
-
-```text
-[ ] CS agent IDs captured (Bot, Tenant, Environment)
-[ ] App registration created (SPA redirect, access_as_user scope)
-[ ] CS agent set to Manual Entra auth with that client ID
-[ ] WebChat builds locally and connects to the CS agent
-[ ] WebChat deployed to Azure Static Web Apps (Free SKU)
-[ ] MCP App tool returns the SWA hostname
-[ ] DA manifest references the tool by exact name
-[ ] DA sideloaded via M365 Agents Toolkit
-[ ] Tenant admin allowed the app in Teams Admin Center
-[ ] End-to-end: user says "open my agent" in M365 Copilot → embedded chat appears → silent SSO → long-running message succeeds
-```
+- Building topics, knowledge sources, or AI flows inside Copilot Studio itself — use the **Copilot Studio Author** sub-agent.
+- Building CEAs (Custom Engine Agents) — different pattern, no MCP App.
+- Microsoft Foundry agents — different platform.
+- Building the MCP SDK runtime itself — recommend `@modelcontextprotocol/sdk` (Node) or the equivalent in their language.
+- Live-agent escalation broker design — covered separately under the "handoff" pattern; the reference repo's `cs.ts` detects CS `Handoff` activities but the broker side is out of scope for this skill.

@@ -1,5 +1,7 @@
 # Architecture Center entry (draft)
 
+> **⚠️ STALE — written against the v0.5 chat-in-chat architecture.** This draft references MSAL silent SSO inside the widget and a SPA WebChat iframed under skybridge — both retired in v0.6 per [ADR 0001](decisions/0001-chat-in-chat-was-wrong.md). The current architecture is in [ARCHITECTURE.md](ARCHITECTURE.md). This file is kept because it was structured for the Microsoft Azure Architecture Center submission format; **if you resurrect the submission, rewrite the workflow and components against [ARCHITECTURE.md](ARCHITECTURE.md) first**.
+
 > A draft of an Architecture Center / Microsoft Learn-style article describing this pattern. When this project is mature enough to publish, this content can be edited for tone and submitted as an article PR to the **Microsoft Copilot Studio** or **Microsoft 365 Copilot** Architecture Center.
 >
 > Audience: enterprise architects evaluating "should we adopt this pattern?". Length, tone, and section ordering follow Architecture Center conventions.

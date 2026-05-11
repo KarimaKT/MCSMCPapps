@@ -1,5 +1,7 @@
 # Maker config — branding & identity
 
+> **⚠️ PARTIALLY STALE — the 8 env vars listed below are for the standalone SWA channel.** The M365 Copilot widget channel ships with its own (smaller) set of env vars described in [WIDGET-CUSTOMIZATION.md § Layer 1](WIDGET-CUSTOMIZATION.md#layer-1--env-vars-the-60-second-rebrand). The `VITE_AAD_*` vars listed in this file are no longer used by the widget (server-side OBO replaced browser MSAL per [ADR 0003](decisions/0003-entra-sso-via-tdp-registration.md)) — they only matter if you ship the standalone SWA. **For the M365 Copilot rebrand path, follow [WIDGET-CUSTOMIZATION.md](WIDGET-CUSTOMIZATION.md) instead.**
+
 > Single page that tells a maker (Copilot Studio agent author / customer eng / SI) how to make this WebChat their own.
 >
 > Audience: someone who wants to fork/clone this repo and ship it for their tenant. They should not need to read TypeScript.

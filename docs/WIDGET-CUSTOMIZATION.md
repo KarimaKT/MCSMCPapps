@@ -1,187 +1,168 @@
 # Widget customization
 
-> Goal: customizing this widget is **at least as easy** as the
-> Copilot Studio Kit Webchat Playground. Read this if you forked the repo
-> and want to make the chat surface look like *your* product.
+> Goal: a maker who has forked this repo and wants to make the inline data card look like *their* product, or add a new visualization, should not need to read TypeScript end-to-end. This page is the path.
+>
+> This doc was rewritten 2026-05-11 to match the v0.7 data-widget pattern. The v0.5 "edit `Widget.tsx` with `<Composer>` + `<BasicWebChat>`" path is gone — that whole approach was retired per [ADR 0001](decisions/0001-chat-in-chat-was-wrong.md). Previous version preserved as [`WIDGET-CUSTOMIZATION.v0.5.md`](WIDGET-CUSTOMIZATION.v0.5.md).
 
 ## TL;DR
 
 Three layers, ordered easiest → most flexible:
 
-1. **Change colors / fonts / agent name:** edit env vars (8 of them). No code.
-2. **Full visual rebrand:** drop a `styleOptions.json` exported from
-   [Copilot Studio Kit Webchat Playground](https://aka.ms/CopilotStudioKit).
-   No code.
-3. **Add UI features (charts, panels, cards):** edit `Widget.tsx`. React.
+1. **Change colors / fonts / agent name:** edit env vars in `webchat-ui/.env`. No code.
+2. **Add a new layout / chart / panel:** edit [`webchat-ui/src/widget-v2/main.tsx`](../webchat-ui/src/widget-v2/main.tsx). React 16 + inline CSS, ~250 KB bundle budget.
+3. **Render a new content type from CS:** extend `structuredContent` in [`mcp-server/src/cs.ts`](../mcp-server/src/cs.ts) (extractor) and [`mcp-server/src/tools/openCopilotStudioChat.ts`](../mcp-server/src/tools/openCopilotStudioChat.ts) (passthrough), then render it in `main.tsx`.
 
-After any change: `npm run build:widget` in `webchat-ui/`. The MCP server
-picks up the new bundle on next process start.
+After any change:
+
+```pwsh
+cd webchat-ui
+npm run build:widget-v2
+```
+
+The MCP server picks up the new bundle from `dist-widget-v2/index.widget-v2.html` at start. The CI workflow does the same copy on deploy.
 
 ---
 
 ## Layer 1 — env vars (the 60-second rebrand)
 
-Edit `webchat-ui/.env` (copy from `.env.example` first). Set any of:
+Copy `webchat-ui/.env.example` to `webchat-ui/.env` and set any of:
 
-| Variable | Effect |
-|---|---|
-| `VITE_BRAND_AGENT_NAME` | Display name on widget header |
-| `VITE_BRAND_COMPANY_NAME` | Company name shown above the agent name |
-| `VITE_BRAND_ACCENT_COLOR` | Primary color (user bubble, send button, links) |
-| `VITE_BRAND_ACCENT_FOREGROUND` | Text color on the accent (user bubble text) |
-| `VITE_BRAND_FONT_FAMILY` | CSS font stack |
-| `VITE_BRAND_BOT_AVATAR_INITIALS` | 1–2 characters in the bot avatar |
-| `VITE_BRAND_LOGO` | Single emoji / initials displayed in standalone-SWA header |
-| `VITE_BRAND_PAGE_TITLE` | `<title>` in the standalone-SWA bundle |
-
-Then:
+| Variable | Effect | Example |
+|---|---|---|
+| `VITE_BRAND_AGENT_NAME` | Display name on widget header | `Acme Analyst` |
+| `VITE_BRAND_AGENT_SUBTITLE` | Tagline shown under the agent name | `AI economic briefings` |
+| `VITE_BRAND_COMPANY_NAME` | Company name in the header chrome | `Contoso` |
+| `VITE_BRAND_ACCENT_COLOR` | Primary color (links, buttons, accent borders) | `#003399` |
+| `VITE_BRAND_ACCENT_FOREGROUND` | Text color on the accent (button text, etc.) | `#ffd200` |
+| `VITE_BRAND_FONT_FAMILY` | CSS font stack | `"Segoe UI", system-ui, sans-serif` |
+| `VITE_BRAND_LOGO` | Single emoji / character / data: URL — small mark in the header | `€` |
+| `VITE_BRAND_PAGE_TITLE` | `<title>` for the standalone SWA channel | `Acme Analyst` |
 
 ```pwsh
 cd webchat-ui
-npm run build:widget   # for the M365 Copilot widget
-npm run build          # for the standalone SWA
+npm run build:widget-v2
 ```
 
-These env values **override** anything in `style-options.json` for the
-keys they touch. So if you only want to swap the accent color, you edit
-one env var, rebuild, ship.
+The values are baked into the bundle at build time. The CI workflow reads the same names from **GitHub Actions Variables** (Repository settings → Secrets and variables → Actions → Variables). Anything not set falls back to a sensible default in the source.
 
-CI: set the same names as **GitHub Actions Variables** (Settings →
-Secrets and variables → Actions → Variables). The
-`azure-mcp-server.yml` workflow reads them and passes them to the build.
+For batch-renaming across all the spots a maker touches (server config, manifest, widget env), use the brand-swap helper:
 
----
+```pwsh
+./scripts/swap-brand.ps1 `
+  -CsEnvId "<env guid>" `
+  -CsSchema "<schema name>" `
+  -TenantId "<m365 tenant guid>" `
+  -AgentName "Acme Analyst" `
+  -AccentColor "#003399" `
+  -LogoText "A"
+```
 
-## Layer 2 — `style-options.json` (the CS Kit-compatible visual edit)
-
-This is the productized layer. It works like Copilot Studio Kit's
-Webchat Playground:
-
-1. Open the [Copilot Studio Kit Webchat Playground](https://aka.ms/CopilotStudioKit)
-   (or any BotFramework Web Chat theming tool).
-2. Tweak visuals interactively — bubbles, fonts, suggested actions,
-   sendbox, anything.
-3. Export the `styleOptions` JSON from the playground.
-4. Paste it over `webchat-ui/src/widget/style-options.json`.
-5. `npm run build:widget` and you're done.
-
-Every key is documented in
-[BotFramework Web Chat StyleOptions](https://github.com/microsoft/BotFramework-WebChat/blob/main/packages/api/src/StyleOptions.ts).
-The most useful keys for branding:
-
-| Key | What it controls |
-|---|---|
-| `accent` | Send button, links, focus rings |
-| `bubbleBackground` / `bubbleTextColor` | Bot message bubble |
-| `bubbleFromUserBackground` / `bubbleFromUserTextColor` | User message bubble |
-| `bubbleBorderRadius` / `bubbleFromUserBorderRadius` | Bubble corner roundness |
-| `botAvatarInitials` / `botAvatarBackgroundColor` / `botAvatarTextColor` | Bot avatar |
-| `userAvatarInitials` | Set to empty to hide |
-| `suggestedActionLayout` | `"stacked"` or `"flow"` |
-| `suggestedActionBorderColor` / `suggestedActionTextColor` | "Try…" buttons |
-| `sendBoxBackground` / `sendBoxTextColor` / `sendBoxBorderTop` | Bottom input |
-| `primaryFont` / `monospaceFont` | Font stacks |
-| `hideUploadButton` | Hide attachment paperclip |
-| `rootHeight` / `rootWidth` | Override container sizing |
-
-The shipped `style-options.json` in this repo is a Eurozone Analyst
-preset — feel free to delete and start from CS Kit Playground export.
+The script is idempotent and only edits the four files a maker should change. Source: [`scripts/swap-brand.ps1`](../scripts/swap-brand.ps1).
 
 ---
 
-## Layer 3 — React component (the unbounded path)
+## Layer 2 — React component (the unbounded path)
 
-When env vars and `styleOptions` aren't enough — you want a chart panel,
-a side rail, a custom Adaptive Card renderer, follow-up tool buttons —
-edit the React tree.
+Open [`webchat-ui/src/widget-v2/main.tsx`](../webchat-ui/src/widget-v2/main.tsx). It's one file, ~830 lines, single React tree. The shape:
 
-Files of interest:
-
-- [`webchat-ui/src/widget/Widget.tsx`](../webchat-ui/src/widget/Widget.tsx)
-  — main React component. Mounts `<Composer>` + `<BasicWebChat>`.
-  Replace `<BasicWebChat />` with custom layouts. Wrap in panels.
-- [`webchat-ui/src/widget/main.tsx`](../webchat-ui/src/widget/main.tsx)
-  — entry. Acquires the token and renders `<Widget>`.
-- [`webchat-ui/src/widget/cs-connection.ts`](../webchat-ui/src/widget/cs-connection.ts)
-  — wraps `CopilotStudioWebChat.createConnection()`. Touch only if you
-  need to override Direct Engine settings.
-- [`webchat-ui/src/widget/host-bridge.ts`](../webchat-ui/src/widget/host-bridge.ts)
-  — reads tool input from `window.openai` + JSON-RPC postMessage.
-  Touch only if you need to react to host events beyond the first message.
-
-`botframework-webchat` exposes hooks at
-[`botframework-webchat/hook`](https://github.com/microsoft/BotFramework-WebChat/tree/main/packages/component/src/hooks)
-that let you build any custom layout against the same activity stream.
-
-After changes: `npm run build:widget`, then redeploy the MCP server (or
-copy the bundle into `mcp-server/dist/assets/widget.html` for local
-testing).
-
----
-
-## What about adding a new MCP tool?
-
-Different file. See
-[`mcp-server/src/tools/openCopilotStudioChat.ts`](../mcp-server/src/tools/openCopilotStudioChat.ts)
-for the pattern. Each tool is a one-file addition:
-
-```ts
-// mcp-server/src/tools/myNewTool.ts
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { z } from 'zod';
-
-export function registerMyNewTool(server: McpServer) {
-  server.registerTool('myNewTool', {
-    title: 'My New Tool',
-    description: '...',
-    inputSchema: { foo: z.string() },
-    annotations: { readOnlyHint: true }
-  }, async ({ foo }) => ({
-    content: [{ type: 'text', text: `Did the thing with ${foo}` }]
-  }));
+```
+function Widget() {
+  const payload = readPayload();          // window.openai.toolOutput.structuredContent
+  if (!payload) return <Pending />;
+  if (payload.diag && !payload.diag.ok) return <ErrorState payload={payload} />;
+  return (
+    <div className="mcs-card">
+      <ReplyText markdown={payload.replyText} />
+      <AdaptiveCardHost cards={payload.adaptiveCards} convId={payload.conversationId} />
+      <Citations items={payload.citations} />
+      <SuggestedActions actions={payload.suggestedActions} convId={payload.conversationId} />
+    </div>
+  );
 }
 ```
 
-Then call `registerMyNewTool(server)` from
-[`mcp-server/src/server.ts`](../mcp-server/src/server.ts). Build, redeploy.
+To add a new visualization, write a new component, drop it into the render tree. Examples already in the file:
+
+- `<Sparkline series={...} />` — pure SVG, no deps, ~10 lines.
+- `<CompareBars series={...} />` — CSS grid + accent-colored bars.
+- `<StatBlock title primaryValue deltaText />` — large-number callout.
+
+Use the existing inline CSS classes (`.mcs-card`, `.mcs-stat`, `.mcs-compare`, `.mcs-citations`, `.mcs-error`) — they already respond to the brand env vars.
+
+The widget intentionally does **not** depend on Fluent UI, MUI, or any other component library. The bundle budget is ~250 KB gzipped; adding a heavy framework breaks that (and would compete with the Adaptive Cards renderer which is already 120 KB). If you need shared visual primitives, copy them inline.
+
+### What you can NOT do in the widget (skybridge sandbox constraints)
+
+- ❌ No `eval()`, `new Function()`, dynamic imports of non-bundled modules — CSP blocks all of them.
+- ❌ No `fetch()` to non-allowlisted origins — extend `_meta.ui.csp.connectDomains` in [`mcp-server/src/resources/chatWidget.ts`](../mcp-server/src/resources/chatWidget.ts) first.
+- ❌ No `<iframe>` to other origins — `frameDomains` is empty by design.
+- ❌ No top-level navigation, no popups, no `window.open()` — use `window.openai.openExternal({ href })` for links.
+- ❌ No internal chat input — the M365 Copilot host owns the chat input. [MS UX guidance](https://learn.microsoft.com/microsoft-365/copilot/extensibility) is explicit.
+- ❌ No internal scroll — fit in a single response scroll. For richer flows, request fullscreen mode via `window.openai.requestDisplayMode({ mode: 'fullscreen' })`.
+
+### What's available in the widget
+
+- `window.openai.toolOutput.structuredContent` — what the server sent.
+- `window.openai.toolInput` — what the host LLM called the tool with.
+- `window.openai.theme` — `'light'` | `'dark'` from host theme.
+- `window.openai.displayMode` — `'inline'` | `'fullscreen'`.
+- `window.openai.notifyIntrinsicHeight(h)` — tell the host how tall to render the inline card.
+- `window.openai.requestDisplayMode({ mode })` — go fullscreen for analyst-style reading.
+- `window.openai.openExternal({ href })` — open a link in a new tab.
+- `window.openai.callTool(name, args)` — fire a follow-up tool call (used by Submit and suggested actions).
+- `window.openai.sendFollowUpMessage({ prompt })` — inject a prompt into the host chat as if the user typed it.
+
+Full bridge inventory in [`docs/MCP-APPS-CONTRACT.md`](MCP-APPS-CONTRACT.md).
 
 ---
 
-## Productization
+## Layer 3 — Adding a new content type from CS
 
-If Microsoft were to productize this pattern, the simplest GA shape is:
+Three coordinated edits:
 
-1. **CS Kit Webchat Playground export → drop into our repo** is already
-   the maker workflow. That's the same surface the CS Kit team
-   maintains; there's a clean handoff.
-2. **The single-file widget HTML is the productizable unit.** Microsoft
-   could ship a CLI (`npm create @microsoft/copilot-widget`) that
-   produces this exact file shape from a CS env id + brand vars in one
-   command.
-3. **CSP and `_meta` shape** are already verified against
-   [microsoft/mcp-interactiveUI-samples](https://github.com/microsoft/mcp-interactiveUI-samples).
+### 1. Extract from CS in `cs.ts`
 
-If we don't productize this, the CS Kit team is the natural home — see
-[FEATURE-REQUESTS.md §2.3](FEATURE-REQUESTS.md) for the explicit ask.
+CS replies are Bot Framework activities. To surface a new content type — say a chart payload your CS topic emits as a custom Adaptive Card data field — add an extractor in [`mcp-server/src/cs.ts`](../mcp-server/src/cs.ts). Look for the existing `chartData` extraction as a template: it inspects `activity.attachments` for the private `application/vnd.mcsmcpapps.chart+json` content type and pulls the JSON out.
+
+Add your new extractor next to it. Add the field to `CallCsAgentResult`:
+
+```ts
+export interface CallCsAgentResult {
+  // ...existing fields
+  myNewThing: MyNewThingPayload | null;
+}
+```
+
+### 2. Pass through in the tool
+
+In [`mcp-server/src/tools/openCopilotStudioChat.ts`](../mcp-server/src/tools/openCopilotStudioChat.ts), the handler builds `structuredContent` from the `callCsAgent` result. Add your new field to the object. **This is additive — older widgets ignore the new field.** No manifest bump required.
+
+Same edit in [`submitAdaptiveCardAction.ts`](../mcp-server/src/tools/submitAdaptiveCardAction.ts) if the AC submit path should also carry it.
+
+### 3. Render in the widget
+
+In `main.tsx`, extend the `ToolPayload` interface with the new field, then render it conditionally:
+
+```tsx
+{payload.myNewThing && <MyNewThingComponent data={payload.myNewThing} />}
+```
+
+Build the widget, run the local smoke, ship.
 
 ---
 
 ## Critical: don't break the skybridge bundle
 
-If you change the Vite config (`vite.widget.config.ts`), keep these two settings — they are
-load-bearing for the widget to actually render in M365 Copilot:
+If you change [`webchat-ui/vite.widget-v2.config.ts`](../webchat-ui/vite.widget-v2.config.ts), keep these two settings — they are load-bearing for the widget to actually render in M365 Copilot:
 
 ### `stripCrossorigin()` plugin
 
-Vite emits `<script type="module" crossorigin>...</script>` by default. The skybridge sandbox
-iframe has a **null origin**; the browser's CORS check on the inline script sees null,
-silently refuses to execute, and you get a blank card with no diagnostic.
+Vite emits `<script type="module" crossorigin>...</script>` by default. The skybridge sandbox iframe has a **null origin**; the browser's CORS check on the inline script sees null, silently refuses to execute, and you get a blank card with no diagnostic.
 
-This repo includes a tiny post-transform Vite plugin that strips the attribute. **Do not
-remove it.** Verify after every build:
+This repo includes a tiny post-transform Vite plugin that strips the attribute. **Do not remove it.** Verify after every build:
 
 ```pwsh
-[regex]::Match((Get-Content webchat-ui/dist-widget/index.widget.html -Raw), '<script[^>]*>').Value
+[regex]::Match((Get-Content webchat-ui/dist-widget-v2/index.widget-v2.html -Raw), '<script[^>]*>').Value
 # Expected: <script type="module">         (no crossorigin attribute)
 ```
 
@@ -190,12 +171,9 @@ Microsoft's reference samples include the same plugin
 
 ### `mode: 'production'` + `define NODE_ENV`
 
-Without these, Vite leaks dev-only code that uses `eval()` and `new Function()`. The sandbox
-CSP blocks both. Symptoms: blank card OR a console error about `unsafe-eval`. **Do not
-remove these settings.**
+Without these, Vite leaks dev-only code that uses `eval()` and `new Function()`. The sandbox CSP blocks both. Symptoms: blank card OR a console error about `unsafe-eval`. **Do not remove these settings.**
 
-If you fork this and change frameworks (e.g. swap React for Solid), apply the same two rules
-to your new bundler:
+If you fork this and change frameworks (e.g. swap React for Solid), apply the same two rules to your new bundler:
 
 | Bundler | "Strip crossorigin" equivalent | "Production mode" equivalent |
 |---|---|---|
@@ -205,8 +183,7 @@ to your new bundler:
 | Rollup | `@rollup/plugin-html` config | `process.env.NODE_ENV` define |
 | Next.js (static export) | needs custom post-build step | `NODE_ENV=production npm run build` |
 
-The full list of skybridge contract requirements is in
-[MCP-APPS-CONTRACT.md](MCP-APPS-CONTRACT.md) §6.
+The full skybridge contract is in [`docs/MCP-APPS-CONTRACT.md`](MCP-APPS-CONTRACT.md).
 
 ---
 
@@ -215,20 +192,57 @@ The full list of skybridge contract requirements is in
 ```pwsh
 # 1. Build the widget
 cd webchat-ui
-npm run build:widget
+npm run build:widget-v2
 
-# 2. Stage it for the MCP server
+# 2. Stage it for the MCP server (CI does this on deploy)
 cd ..\mcp-server
-mkdir dist\assets -ErrorAction SilentlyContinue
-copy ..\webchat-ui\dist-widget\index.widget.html dist\assets\widget.html
+New-Item -ItemType Directory dist\assets -Force | Out-Null
+Copy-Item ..\webchat-ui\dist-widget-v2\index.widget-v2.html dist\assets\widget.html -Force
 
-# 3. Run the MCP server
+# 3. Build + run the MCP server with placeholder env vars
+npm run build
+$env:CS_ENV_ID = "00000000-0000-0000-0000-000000000000"
+$env:CS_SCHEMA = "smoke_test"
+$env:AGENT_NAME = "Local"
+$env:AGENT_DESCRIPTION = "local"
+$env:SWA_ORIGIN = "https://example.invalid"
+$env:PORT = "3000"
 node dist\index.js
-
-# 4. Inspect with MCP Inspector at https://inspector.modelcontextprotocol.io
-#    against http://localhost:3000/mcp — call openCopilotStudioChat,
-#    open the resource preview, see your customized widget render.
 ```
 
-If the widget renders correctly in MCP Inspector, it will render
-correctly in M365 Copilot — they implement the same skybridge contract.
+Then in another terminal:
+
+```pwsh
+cd mcp-server
+node scripts/smoke-mcp.mjs http://localhost:3000/mcp --manifest ../declarative-agent/appPackage/ai-plugin.json
+```
+
+If the smoke passes, the contract is intact. Open [MCP Inspector](https://inspector.modelcontextprotocol.io) against `http://localhost:3000/mcp` to preview the rendered widget; if it renders in Inspector, it will render in M365 Copilot (same skybridge contract).
+
+---
+
+## Adding a new MCP tool
+
+Different file. Each tool is a one-file addition in [`mcp-server/src/tools/`](../mcp-server/src/tools/):
+
+```ts
+// mcp-server/src/tools/myNewTool.ts
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
+
+export function registerMyNewTool(server: McpServer): void {
+  server.registerTool('myNewTool', {
+    title: 'My New Tool',
+    description: 'One sentence describing when to call it.',
+    inputSchema: { foo: z.string() },
+    annotations: { readOnlyHint: true }
+  }, async ({ foo }) => ({
+    content: [{ type: 'text', text: `Did the thing with ${foo}` }],
+    structuredContent: { result: foo }
+  }));
+}
+```
+
+Then call `registerMyNewTool(server)` from [`mcp-server/src/server.ts`](../mcp-server/src/server.ts). **Then update the manifest** — both `functions[]`, `run_for_functions[]`, and `x-mcp_tool_description.tools[]` in [`declarative-agent/appPackage/ai-plugin.json`](../declarative-agent/appPackage/ai-plugin.json), bump `manifest.json` version, and re-approve in the tenant admin. The locked-contract rules in [ADR 0005](decisions/0005-arg-optionality-is-locked.md) apply.
+
+The pre-deploy smoke ([`mcp-server/scripts/smoke-mcp.mjs`](../mcp-server/scripts/smoke-mcp.mjs)) will fail in CI if the manifest and server disagree.

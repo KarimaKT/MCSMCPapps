@@ -1,5 +1,7 @@
 # MCSMCPapps — capabilities & demo plan
 
+> **⚠️ STALE on rendering details — was written for the v0.5 BotFramework Web Chat-based widget.** The capability matrix (markdown, Adaptive Cards, citations, suggested actions, forms, etc.) is conceptually right — those features all ship in v0.7 — but the implementation rows that name `botframework-webchat`, `dist-widget/`, or `Composer + BasicWebChat` are obsolete. For current rendering reality, see [CS-PARITY.md](CS-PARITY.md). Demo script ideas in this file are still useful.
+
 > Authoritative inventory of what this pattern can do end-to-end. Lives next to [BUILD-GUIDE.md](BUILD-GUIDE.md). When demoing, walk through the phases below in order.
 
 ## TL;DR

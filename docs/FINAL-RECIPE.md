@@ -1,5 +1,7 @@
 # Final recipe — embed a Copilot Studio agent in Microsoft 365 Copilot
 
+> **⚠️ STALE on details, still useful as a learnings index.** The 8 ingredients are conceptually correct for the v0.5 chat-in-chat architecture, but the v0.7 data-widget pattern replaces ingredients 5 and 6 (no more browser SWA-as-iframe widget, no more browser MSAL). The 12 commandments below remain valuable — commandments 1–7 about manifest schema, scope, federation, and version numbers are still hard-won truths. **For the current setup recipe, follow [QUICK-START.md](QUICK-START.md).** For the architecture story, read [ARCHITECTURE.md](ARCHITECTURE.md).
+
 > The minimum viable recipe, distilled from the full project. If you start with these eight ingredients in this order, you ship.
 >
 > Lives next to: [BUILD-GUIDE.md](BUILD-GUIDE.md) (long-form), [AUTH-ARCHITECTURE.md](AUTH-ARCHITECTURE.md) (the trust diagram), [MAKER-CONFIG.md](MAKER-CONFIG.md) (rebrand workflow). Read those when you hit a thing.

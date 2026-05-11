@@ -1,8 +1,8 @@
 # MCSMCPapps — Product specification
 
-> **Status:** v0.5 (May 2026). This is the source of truth for what we are building, for whom,
-> and what success looks like. If something in code or another doc disagrees with this file,
-> this file wins until it is updated and re-reviewed.
+> **Status:** v0.7 (last updated 2026-05-11). Manifest at v1.2.0. This is the source of truth for what we are building, for whom, and what success looks like. If something in code or another doc disagrees with this file, this file wins until it is updated and re-reviewed.
+>
+> **Architecture lineage:** The original spec described a "chat-in-chat" widget that embedded BotFramework Web Chat inside the M365 Copilot iframe. That approach was retired in v0.6 per [ADR 0001](decisions/0001-chat-in-chat-was-wrong.md); the current architecture is the **data-widget pattern** — the MCP server calls Copilot Studio Direct Engine server-side and returns a structured payload that the widget renders. The personas, goals, and success criteria below remain valid; the rendering surface and auth boundaries have moved.
 
 ## 1. One-line summary
 

@@ -9,9 +9,11 @@ If you don't have a CS agent yet: build one in [Copilot Studio](https://copilots
 - A Microsoft 365 tenant with Copilot Studio + M365 Copilot licenses (CDX dev tenant works)
 - Tenant admin access to approve the published agent
 - An Azure subscription you can deploy to (App Service B1 + Static Web App Free are enough)
-- Node 20 installed locally
-- Azure CLI + Azure Developer CLI (`azd`) installed
+- Latest Node LTS installed locally (tested on 20 and 22)
+- Azure CLI (`az`) installed and logged in
 - GitHub CLI (`gh`) for the deploy workflow
+
+> **No Azure tenant?** See [HANDOFF.md § No Azure tenant yet?](../HANDOFF.md#no-azure-tenant-yet) for free / trial paths (CDX, Azure free trial, M365 Developer Program).
 
 ## Step 1 — Fork & clone (~1 min)
 
@@ -58,26 +60,65 @@ You can also do these by hand if you prefer. See [`scripts/swap-brand.ps1`](../s
 
 ## Step 4 — Provision Azure resources (~10 min)
 
+There is no `azd up` here — deployment is direct Bicep + GitHub Actions. Provision the resources once, then `git push` deploys updates.
+
 ```pwsh
-azd auth login
-azd up
+az login
+az account set --subscription "<your subscription id>"
+az group create --name rg-mcsmcpapps --location westus2
+az deployment group create `
+  --resource-group rg-mcsmcpapps `
+  --template-file infra/main.bicep `
+  --parameters mcpAgentName="Acme Analyst" `
+               mcpAgentDescription="AI economic briefings" `
+               swaName=swa-mcsmcpapps-<your-suffix> `
+               mcpAppName=app-mcsmcpapps-mcp-<your-suffix>
 ```
 
-`azd` provisions:
-- **Azure App Service B1 (Linux Node 20)** — runs the MCP server. Always On enabled.
-- **Azure Static Web App Free** — hosts the standalone WebChat (secondary surface, optional).
-- **Application Insights** — log + diagnostic streaming.
+This provisions:
+- **Azure App Service B1 (Linux Node 20-LTS)** running the MCP server. Always On enabled.
+- **Azure Static Web App Free** hosting the standalone WebChat (secondary surface, optional).
+- (Application Insights is not provisioned by the Bicep today — enable it post-deploy from the portal if you want telemetry.)
 
-You'll be asked to choose a resource group name and Azure region. Pick something close to your CS environment region.
+After the deployment finishes:
+
+```pwsh
+# Get the publish profile and save as GitHub Actions secret AZURE_MCP_PUBLISH_PROFILE
+az webapp deployment list-publishing-profiles -g rg-mcsmcpapps -n app-mcsmcpapps-mcp-<your-suffix> --xml | gh secret set AZURE_MCP_PUBLISH_PROFILE
+
+# Get the SWA deployment token and save as AZURE_STATIC_WEB_APPS_API_TOKEN
+az staticwebapp secrets list -n swa-mcsmcpapps-<your-suffix> --query properties.apiKey -o tsv | gh secret set AZURE_STATIC_WEB_APPS_API_TOKEN
+```
+
+From now on, pushing to `main` triggers the GitHub Actions workflow in [`.github/workflows/azure-mcp-server.yml`](../.github/workflows/azure-mcp-server.yml) which builds + smoke-tests + deploys the MCP server. The widget bundle deploys via [`.github/workflows/azure-static-web-apps.yml`](../.github/workflows/azure-static-web-apps.yml).
 
 ## Step 5 — Configure Entra SSO via Teams Developer Portal (~10 min)
 
 This is the only manual portal click in the flow. Without SSO, the user gets prompted to sign in inside the widget; with SSO, it's invisible.
 
+First, create an Entra app registration in the tenant where end users sign in:
+
+```pwsh
+$tenantId = "<your m365 tenant id>"
+$appName = "mcsmcpapps-mcp"
+$app = az ad app create --display-name $appName --sign-in-audience AzureADMyOrg | ConvertFrom-Json
+$clientId = $app.appId
+# Identifier URI — must be unique in the tenant.
+az ad app update --id $clientId --identifier-uris "api://$clientId"
+# Client secret (for OBO exchange).
+$secret = az ad app credential reset --id $clientId --years 1 --query password -o tsv
+# API permission: Power Platform CopilotStudio.Copilots.Invoke (delegated).
+az ad app permission add --id $clientId --api 8578e004-a5c6-46e7-913e-12f58912df43 --api-permissions a3a417c1-f0ff-46a2-ac9c-bcc52ef290f3=Scope
+# Admin-consent so users aren't prompted.
+az ad app permission admin-consent --id $clientId
+```
+
+Then wire it up in Teams Developer Portal:
+
 1. Go to [Teams Developer Portal](https://dev.teams.microsoft.com) → Tools → Microsoft Entra SSO.
 2. Click **+ New SSO**. Choose **Bot, message extension, or M365 Copilot agent**.
-3. Set **Client ID** = the App Registration `azd up` created (find it: `az ad app list --display-name 'mcsmcpapps-*'`).
-4. Set **Application ID URI** = `api://auth-<sso-reg-id>/<client-id>` (TDP fills the structure; you paste the client id at the end).
+3. Set **Client ID** = `$clientId` from the script above.
+4. Set **Application ID URI** = `api://<clientId>` (the value you just set above).
 5. Save the SSO registration. Copy the **Reference ID** (a base64 token like `eyJ...`).
 6. Update `declarative-agent/appPackage/ai-plugin.json`:
    ```json
@@ -89,12 +130,12 @@ This is the only manual portal click in the flow. Without SSO, the user gets pro
 7. Update App Service env vars (one-time):
    ```pwsh
    $rg = "rg-mcsmcpapps"
-   $app = "app-mcsmcpapps-mcp"
+   $app = "app-mcsmcpapps-mcp-<your-suffix>"
    az webapp config appsettings set -g $rg -n $app --settings `
-     ENTRA_TENANT_ID="<your tenant id>" `
-     ENTRA_AUDIENCE="api://auth-<sso-reg-id>/<client-id>" `
-     ENTRA_CLIENT_ID="<your client id>" `
-     ENTRA_CLIENT_SECRET="<your client secret>"
+     ENTRA_TENANT_ID="$tenantId" `
+     ENTRA_AUDIENCE="api://$clientId" `
+     ENTRA_CLIENT_ID="$clientId" `
+     ENTRA_CLIENT_SECRET="$secret"
    ```
 
 (The full discussion of why this looks the way it does is in [`docs/decisions/0003-entra-sso-via-tdp-registration.md`](decisions/0003-entra-sso-via-tdp-registration.md).)
