@@ -2,7 +2,9 @@
 
 > One-page entry point for the contributor taking over this project. Read this first; everything else is reference.
 
-**State at handoff (2026-05-11):** working code, working live deployment in CDX, manifest source at v1.2.0 (pending publish), docs mostly accurate with a handful known-stale entries flagged below.
+**State at handoff (2026-05-12):** working code, working live deployment in CDX, manifest source at v1.2.0 (pending publish), docs mostly accurate with a handful known-stale entries flagged below.
+
+> **Repo split (2026-05-12).** This repo (`KarimaKT/MCSMCPapps`) is the private archive with full 78-commit development history. The colleague-facing copy is at <https://github.com/KarimaKT/MCSMCPapps-shared> — a single squashed commit, with personal subscription/tenant IDs and Microsoft-internal design docs scrubbed. The shared repo is what you'd hand to a colleague. Use this archive for git blame, history, and the publish-ready blog draft at [`docs/archive/BLOG-publish.2026-05.md`](docs/archive/BLOG-publish.2026-05.md).
 
 ---
 
