@@ -9,10 +9,40 @@
 ## What you're getting
 
 1. **This GitHub repo** — clone it, you're done.
-2. **Copilot Studio agent solution `.zip`** — Eurozone Analyst topics, knowledge sources, agent flow. Import in your tenant via Power Apps maker portal → Solutions → Import.
-3. **Custom connector solution `.zip`** — "ECB Rates and FX" connector (despite the name, it hits both the ECB SDMX API and Eurostat). Imported the same way.
+2. **Copilot Studio agent solution `.zip`** — the Eurozone Analyst agent that this repo was built around (topics + knowledge sources + agent flow). Import it in your tenant via Power Apps maker portal → Solutions → Import. **Use this as a working reference, or swap it out for any other Copilot Studio agent — see [Agent flexibility](#agent-flexibility) below.**
+3. **Custom connector solution `.zip`** — "ECB Rates and FX" connector (despite the name, it hits both the ECB SDMX API and Eurostat). Imported the same way. Only relevant if you keep the Eurozone agent; drop it if you swap.
 
 Both zips are shared separately. Solutions don't carry credentials; you re-authenticate the connector after import.
+
+## Agent flexibility
+
+**The Eurozone Analyst agent is an example, not a requirement.** This whole repo is reusable for any Copilot Studio agent that:
+
+- Lives in a Power Platform environment you can reach (not Default — see the warning at the bottom of QUICK-START Step 2).
+- Has a schema name and you know the environment GUID.
+- Talks to users in natural language (topics, knowledge sources, AI flows — the standard CS surface).
+
+To swap in a different agent:
+
+1. **Skip the Eurozone solution zip import.** Use your own agent directly.
+2. Run [`scripts/swap-brand.ps1`](scripts/swap-brand.ps1) with your agent's env id, schema, and tenant id — it updates `mcp-server/src/config.ts` defaults, `webchat-ui/.env` brand vars, and the DA manifest in one shot.
+3. Edit [`declarative-agent/appPackage/declarativeAgent.json`](declarative-agent/appPackage/declarativeAgent.json) `name`, `description`, `instructions`, `conversation_starters` to match your agent's purpose.
+4. Edit [`declarative-agent/appPackage/manifest.json`](declarative-agent/appPackage/manifest.json) `id` (new GUID), `developer.*`, and `version` (start at `1.0.0` per ADR 0005 — must not start with `0`).
+5. The MCP server code is agent-agnostic. The only places where "Eurozone" appears are display strings and the running example in docs/diagrams — keep them or replace them, both work.
+
+What **doesn't** change when you swap agents:
+
+- The MCP server logic (`mcp-server/src/`) — calls whatever CS agent the env vars point at.
+- The widget bundle (`webchat-ui/src/widget-v2/`) — renders whatever `structuredContent` the server emits.
+- The auth pattern (server-side OBO with the user's M365 identity).
+- The locked-contract surface (tool names and schemas in `ai-plugin.json`).
+
+What **does** change:
+
+- The Adaptive Cards your agent emits will look different — they pass through verbatim.
+- The branding env vars (`VITE_BRAND_*`) and the `AGENT_NAME` App Service setting.
+- DA `instructions` and `conversation_starters` in [`declarativeAgent.json`](declarative-agent/appPackage/declarativeAgent.json).
+- Manifest GUID and developer info.
 
 ---
 
@@ -61,15 +91,17 @@ Walk through [`docs/QUICK-START.md`](docs/QUICK-START.md) end to end. Summary:
 
 1. Clone repo, `npm i` in `mcp-server/` and `webchat-ui/`.
 2. Provision Azure resources from [`infra/main.bicep`](infra/main.bicep) — there's no `azd up` here; deploy with plain Bicep (see [`infra/README.md`](infra/README.md) for the one-liner).
-3. Import the two CS solution zips in Power Apps maker portal.
-4. Re-authenticate the ECB Rates and FX connector (Test tab → sign in).
+3. **If using the Eurozone agent:** import the two CS solution zips in Power Apps maker portal. **If using your own agent:** skip this step; just note your agent's environment id and schema name.
+4. If you imported the ECB Rates and FX connector: re-authenticate it (Test tab → sign in). If you swapped agents, ignore.
 5. Create your Entra app registration via Teams Developer Portal SSO ([docs/AUTH-ARCHITECTURE.md "Setup checklist"](docs/AUTH-ARCHITECTURE.md)).
-6. Edit [`declarative-agent/appPackage/manifest.json`](declarative-agent/appPackage/manifest.json): your own `id` (new GUID), your own developer info.
-7. Set GitHub Actions secrets so CI deploys (publish profile + SWA token).
-8. Push to main → CI builds + smoke-tests + deploys the MCP server.
-9. Publish the declarative agent via Agents Toolkit → Provision → Publish.
-10. Approve in Microsoft 365 admin center → All agents → Requests.
-11. Smoke test S01 from [docs/SMOKE-CHECKLIST.md](docs/SMOKE-CHECKLIST.md) within 30 sec of approval. If it fails, revert.
+6. Run [`scripts/swap-brand.ps1`](scripts/swap-brand.ps1) with your env id, schema, tenant id, and agent display name — it updates `config.ts`, `webchat-ui/.env`, the DA manifest, and `appPackage/manifest.json` in one shot.
+7. Edit [`declarative-agent/appPackage/manifest.json`](declarative-agent/appPackage/manifest.json): your own `id` (new GUID), your own developer info, version `1.0.0`.
+8. Edit [`declarative-agent/appPackage/declarativeAgent.json`](declarative-agent/appPackage/declarativeAgent.json): `name`, `description`, `instructions`, `conversation_starters` to match your agent.
+9. Set GitHub Actions secrets so CI deploys (publish profile + SWA token).
+10. Push to main → CI builds + smoke-tests + deploys the MCP server.
+11. Publish the declarative agent via Agents Toolkit → Provision → Publish.
+12. Approve in Microsoft 365 admin center → All agents → Requests.
+13. Smoke test S01 from [docs/SMOKE-CHECKLIST.md](docs/SMOKE-CHECKLIST.md) within 30 sec of approval. If it fails, revert.
 
 ---
 
